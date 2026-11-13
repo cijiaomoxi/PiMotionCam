@@ -168,7 +168,24 @@ function renderState(s) {
   setText('m-dfps', (s.detect_fps || 0).toFixed(1));
   setText('m-events', s.events_total || 0);
   const media = s.media || {};
-  setText('m-disk', (media.disk_used || bytes(media.disk_bytes)) + ' / ' + (media.max_disk_gb || 0) + 'GB');
+  // 「磁盘」显示目标文件系统的**真实剩余空间**。
+  // 媒体配额（磁盘上限）可以调得比整块盘还大——128 GB 的配额配一块
+  // 28.7 GB 的 SD 卡完全合法——这时候配额永远不会触发，
+  // 唯一有意义、能预警的数字就是"还剩多少空间"。
+  const freeHuman = media.disk_free_human || bytes(media.disk_free_bytes || 0);
+  setText('m-disk', t('metric.diskFree') + ' ' + freeHuman);
+  const diskTile = $('m-disk');
+  if (diskTile && diskTile.parentElement) {
+    diskTile.parentElement.className = 'metric' + (media.disk_low ? ' bad' : '');
+  }
+  // 侦测调参页的实时读数：媒体占用 vs 配额，以及磁盘真实剩余
+  setText('rec-diskinfo',
+    t('label.diskNow', {
+      used: media.disk_used || bytes(media.disk_bytes),
+      quota: (media.max_disk_gb || 0) + ' GB',
+      free: freeHuman,
+      total: media.disk_total_human || '-'
+    }));
   setText('m-preset', s.preset || t('state.notSelected'));
   setText('ver', s.version || '–');
 
@@ -180,7 +197,7 @@ function renderState(s) {
   setText('osd-fps', (s.fps || 0).toFixed(1));
   setText('osd-dfps', (s.detect_fps || 0).toFixed(1));
   setText('osd-events', s.events_total || 0);
-  setText('osd-disk', media.disk_used || bytes(media.disk_bytes));
+  setText('osd-disk', freeHuman);
   setText('osd-algo', det.algorithm || '–');
   setText('osd-region', det.region || '–');
   setText('osd-ratio', ((det.ratio || 0) * 100).toFixed(3) + '%');
@@ -632,6 +649,7 @@ function fillConfig() {
   setRange('rec-gap', 'v-rec-gap', rec.event_gap_seconds, (v) => v + ' s');
   setRange('rec-maxev', 'v-rec-maxev', rec.max_event_seconds, (v) => v + ' s');
   setRange('rec-maxdisk', 'v-rec-maxdisk', rec.max_disk_gb, (v) => v + ' GB');
+  setRange('rec-minfree', 'v-rec-minfree', rec.min_free_gb, (v) => v + ' GB');
   setRange('rec-quality', 'v-rec-quality', rec.quality, (v) => 'CRF ' + v);
   if ($('rec-encoder')) $('rec-encoder').value = rec.encoder || 'auto';
 
@@ -666,6 +684,7 @@ async function saveConfig() {
       event_gap_seconds: +$('rec-gap').value,
       max_event_seconds: +$('rec-maxev').value,
       max_disk_gb: +$('rec-maxdisk').value,
+      min_free_gb: +$('rec-minfree').value,
       encoder: $('rec-encoder').value,
       quality: +$('rec-quality').value
     },
@@ -980,9 +999,25 @@ async function loadStorage() {
     }
 
     const u = s.usage || {};
-    setText('storage-usage', (u.free_human || '-') + ' / ' + (u.total_human || '-'));
+    setText('storage-usage', t('storage.usageLine', {
+      free: u.free_human || '-',
+      total: u.total_human || '-'
+    }));
 
-    // 设备明细
+    // 剩余空间低于下限时明确告警（选外置盘时尤其重要：
+    // 新目标的剩余空间跟 SD 卡完全是两回事）
+    const lowHint = $('storage-low');
+    if (lowHint) {
+      if (s.disk_low) {
+        lowHint.textContent = s.disk_reason || t('storage.lowSpace');
+        lowHint.className = 'hint warn';
+      } else {
+        lowHint.textContent = '';
+        lowHint.className = 'hint';
+      }
+    }
+
+    // 设备明细：每个候选盘都把剩余空间列出来，方便横向比较
     const box = $('storage-devices');
     if (box) {
       box.innerHTML = devs.length ? devs.map((d) => {
@@ -992,8 +1027,13 @@ async function loadStorage() {
         const kind = d.kind === 'internal'
           ? t('storage.internal')
           : storageKindLabel(d.kind);
+        const space = d.free_human
+          ? '<span class="pc">' + esc(d.free_human) + ' / ' + esc(d.total_human || '-') +
+            '</span>'
+          : '';
         return '<div class="rrow"><span class="nm">' + esc(d.label || d.path) + '</span>' +
-          '<span class="pc">' + esc(d.path) + ' · ' + esc(kind) + '</span>' + badge + '</div>';
+          '<span class="pc">' + esc(d.path) + ' · ' + esc(kind) + '</span>' +
+          space + badge + '</div>';
       }).join('') : '<p class="hint">' + t('storage.noDevices') + '</p>';
     }
 
@@ -1574,6 +1614,7 @@ function bindRanges() {
     ['rec-gap', 'v-rec-gap', (v) => v + ' s'],
     ['rec-maxev', 'v-rec-maxev', (v) => v + ' s'],
     ['rec-maxdisk', 'v-rec-maxdisk', (v) => v + ' GB'],
+    ['rec-minfree', 'v-rec-minfree', (v) => v + ' GB'],
     ['rec-quality', 'v-rec-quality', (v) => 'CRF ' + v],
     ['cam-fps', 'v-cam-fps', (v) => v + ' fps'],
     ['cam-rot', 'v-cam-rot', (v) => v + '°'],

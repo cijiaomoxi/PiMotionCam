@@ -450,11 +450,14 @@ class StorageMonitor:
     状态与 ``RuntimeState``，供界面显示与录像写入前拦截使用。
     """
 
-    def __init__(self, config, state, log=None, interval: float = 3.0):
+    def __init__(self, config, state, log=None, interval: float = 3.0,
+                 on_disk=None):
         self.config = config
         self.state = state
         self.log = log
         self.interval = max(1.0, float(interval))
+        # 每轮复查时顺带刷新磁盘剩余空间（轻量，不遍历媒体目录）
+        self.on_disk = on_disk
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -526,6 +529,14 @@ class StorageMonitor:
             )
         except Exception:
             pass
+
+        # 目标变了（切换了外部存储、或从回退状态切回），磁盘剩余空间
+        # 必须按**新目标**重算，不能沿用旧目标的数值。
+        if self.on_disk:
+            try:
+                self.on_disk()
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"disk check error: {exc}")
         return {"ok": ok, "reason": reason, "dir": str(target),
                 "fallback": fallback, "target": str(configured)}
 
@@ -544,4 +555,12 @@ class StorageMonitor:
         total, free = disk_usage(self.config.media_dir())
         st["usage"] = {"total": total, "free": free,
                        "total_human": _human(total), "free_human": _human(free)}
+        # 磁盘护栏状态：剩余空间是否已经低于下限
+        try:
+            st["disk_low"] = bool(self.state.get("disk_low", False))
+            st["disk_reason"] = self.state.get("disk_reason", "") or ""
+            st["min_free_gb"] = float(
+                self.config.get("record", "min_free_gb", default=1) or 0)
+        except Exception:
+            pass
         return st

@@ -580,6 +580,69 @@ dropdown.
 > Tip: `/media/pi/USB` is only a common convention; the real mount point is whatever `/proc/mounts` and `lsblk -f`
 > report. The dropdown lists the **actual mount points the system currently has**, so just pick one.
 
+#### Disk monitoring: the quota and the free space are not the same thing
+
+The "Disk" indicator in the top bar shows the **real free space of the target filesystem** (e.g. `free 20.9 GB`)
+and turns red below the floor. The detection tab shows the media usage, the quota and the free space side by side
+under the recording parameters.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `record.max_disk_gb` | `8` | **Media quota**: the limit for recordings + snapshots + time-lapse in GB (1–128). The oldest recordings are deleted once it is exceeded. `0` disables the limit. |
+| `record.min_free_gb` | `1` | **Free-space floor**: below this much free space on the target filesystem (GB, 0–20) the old media is removed; if that is not enough, recording is paused and the alarm goes off. `0` switches the guard off. |
+
+**Why two settings are needed**: the quota may be set larger than the whole disk — `max_disk_gb = 128` on a
+28.7 GB SD card is perfectly valid, but then the quota **never triggers** and recording continues until the
+filesystem is 100 % full. An ext4 root partition at 100 % means no log can be written, no configuration can be
+saved, and the device may no longer boot. What protects you is "how much space is left", not "how much media has
+piled up".
+
+**Cleanup order** (your history is never destroyed):
+
+1. The **oldest recordings** go first (together with their two snapshots); only when the recordings are gone and
+   the gap is still open do the **time-lapse** files go (they can be regenerated);
+2. **If deleting all the media still would not close the gap**, the disk is full of something else (system logs,
+   another application, another partition). In that case **not a single recording is deleted** — recording is
+   paused and the alarm goes off instead, because keeping the history matters more than keeping a recording count;
+3. If a file is deleted but the space is not actually released (something else is eating it), the cleanup stops
+   immediately;
+4. Every automatic cleanup is written to the service log: `disk guard: removed N old media file(s)`.
+
+**Switching the target re-checks the free space**: after switching to an external drive the figures are recomputed
+for the new target — the `POST /api/storage` response carries a `disk` section with the fresh result, the
+background thread re-checks every three seconds, and every candidate device is listed with its own usable /
+total figures.
+
+```bash
+# the free space of the current target and the guard state
+curl -s http://pi.local:8080/api/storage | python3 -m json.tool
+
+# switching the target returns the recomputed figures for the new target
+curl -s -X POST http://pi.local:8080/api/storage \
+  -H 'Content-Type: application/json' \
+  -d '{"dir":"/media/pi/USB"}' | python3 -m json.tool
+```
+
+The relevant fields of the response:
+
+```json
+{
+  "ok": true,
+  "storage": {
+    "disk_low": false,
+    "disk_reason": "",
+    "min_free_gb": 1.0,
+    "usage": {"free": 22403497984, "free_human": "20.9 GB",
+              "total": 30800916480, "total_human": "28.7 GB"}
+  },
+  "disk": {"total": 30800916480, "free": 22403497984,
+           "used": 486040673, "low": false, "removed": 0, "reason": ""}
+}
+```
+
+The `media` section of `GET /api/state` carries the same figures (`disk_free_bytes` / `disk_free_human` /
+`disk_total_bytes` / `disk_total_human` / `disk_low` / `disk_reason` / `min_free_gb`).
+
 ---
 
 ## 8. Timelapse, Servo, Scheduled Commands, and Event Hooks
@@ -1307,7 +1370,10 @@ Check in this order:
 1. **Is recording paused?** Look at the "Pause Recording" button on the Live Preview tab, and at the `record.paused` configuration key.
 2. **Is detection enabled?** **Detection Tuning** → "Enable Motion Detection", and the `motion.enabled` key.
 3. **Is the event gap too long?** `record.event_gap_seconds` defaults to 10 seconds, and motion arriving sooner than that after the previous event is swallowed.
-4. **Is the disk full?** Check the "Disk" indicator in the top bar or run `du -sh ~/pikrellcam-lite/media`; files beyond `max_disk_gb` are deleted automatically.
+4. **Is the disk full?** The "Disk" indicator in the top bar shows the **real free space** of the target
+   filesystem (it turns red when the space runs low); `du -sh ~/pikrellcam-lite/media` shows the media usage.
+   Files beyond `max_disk_gb` are deleted automatically, and the same happens when the free space drops below
+   `min_free_gb` — if that is not enough, recording is paused and the alarm goes off.
 5. **Is ffmpeg available?** Run `which ffmpeg`; without it the service cannot encode.
 6. **Read the log**: `journalctl _SYSTEMD_USER_UNIT=pikrellcam-lite.service -f | grep -i "ffmpeg\|event"`.
 7. **Confirm events are actually triggering**: the bottom-left OSD on the Live Preview tab shows the matched algorithm, region, and change ratio.

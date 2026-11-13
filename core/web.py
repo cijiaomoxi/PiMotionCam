@@ -23,7 +23,7 @@ from .i18n import available as i18n_available
 from .i18n import resolve as resolve_language
 from .i18n import strings as i18n_strings
 from .i18n import translate as i18n_translate
-from .storage import check_target
+from .storage import check_target, disk_usage
 from .util import dir_size, human_size, run_command, tail_file
 
 def _make_placeholder_jpeg() -> bytes:
@@ -197,13 +197,28 @@ def create_app(service) -> Flask:
         st = service.state.snapshot()
         cfg = service.config.snapshot()
         videos = service.config.media_sub("videos")
+        media_dir = service.config.media_dir()
+        used_bytes = dir_size(media_dir)
+        # 目标文件系统的真实剩余空间——每次请求都现算，
+        # 不依赖后台那次 3 秒复查，避免界面显示过期的数字。
+        try:
+            total_bytes, free_bytes = disk_usage(media_dir)
+        except Exception:
+            total_bytes, free_bytes = 0, 0
         st["media"] = {
             "videos": len(list(videos.glob("*.mp4"))) if videos.exists() else 0,
             "stills": len(list(service.config.media_sub("stills").glob("*.jpg"))),
-            "disk_bytes": dir_size(service.config.media_dir()),
-            "disk_used": human_size(dir_size(service.config.media_dir())),
+            "disk_bytes": used_bytes,
+            "disk_used": human_size(used_bytes),
             "max_disk_gb": cfg["record"]["max_disk_gb"],
-            "dir": str(service.config.media_dir()),
+            "min_free_gb": cfg["record"].get("min_free_gb", 1),
+            "disk_total_bytes": total_bytes,
+            "disk_free_bytes": free_bytes,
+            "disk_total_human": human_size(total_bytes),
+            "disk_free_human": human_size(free_bytes),
+            "disk_low": bool(st.get("disk_low")),
+            "disk_reason": st.get("disk_reason", "") or "",
+            "dir": str(media_dir),
         }
         st["presets"] = sorted((cfg.get("presets") or {}).keys())
         st["version"] = _version()
@@ -577,7 +592,11 @@ def create_app(service) -> Flask:
         service.config.set({"media": patch})
         service.storage.tick()
         service.config.ensure_dirs()
-        return jsonify({"ok": True, "storage": service.storage.status()})
+        # 换了目标就必须按**新目标**的剩余空间重新判断一次：
+        # 新盘可能已经快满了，老的护栏数值对它毫无意义。
+        disk = service.recorder.check_disk()
+        return jsonify({"ok": True, "storage": service.storage.status(),
+                        "disk": disk})
 
     @app.route("/api/archive", methods=["POST"])
     def api_archive():

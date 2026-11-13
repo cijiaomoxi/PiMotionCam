@@ -90,6 +90,11 @@ a:hover { text-decoration: underline; }
 }
 .metric label { display: block; font-size: 10px; color: var(--dim); letter-spacing: .3px; }
 .metric b { font: 600 13px/1.3 var(--mono); color: var(--fg); }
+/* 磁盘剩余空间告警 */
+.metric.warn { border-color: rgba(240, 161, 58, .45); }
+.metric.warn b { color: var(--warn); }
+.metric.bad { border-color: rgba(240, 82, 77, .5); }
+.metric.bad b { color: var(--bad); }
 
 .topactions { display: flex; gap: 8px; align-items: center; }
 

@@ -17,7 +17,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from .util import jpeg_crop, jpeg_thumbnail
+from .util import dir_size, jpeg_crop, jpeg_thumbnail
 
 try:
     from PIL import Image
@@ -80,10 +80,11 @@ def _mp4_has_moov(path: Path) -> bool:
 
 
 class Recorder:
-    def __init__(self, config, state, on_event=None):
+    def __init__(self, config, state, on_event=None, log=None):
         self.config = config
         self.state = state
         self.on_event = on_event          # 回调 (name, payload)
+        self.log = log                    # 日志回调 (msg)
         self._lock = threading.RLock()
         self._buffer: deque = deque()     # (ts, jpeg)
         self._proc: subprocess.Popen | None = None
@@ -276,14 +277,27 @@ class Recorder:
         SD 卡，把根分区撑爆，树莓派直接变砖。
 
         所以每次开新事件前都确认一次：目标必须此刻仍是挂载点。
+        同时看一眼目标文件系统的剩余空间——写满了照样会把盘撑爆。
         """
         try:
             ok, reason, _ = self.config.media_write_target()
         except Exception:
-            return True
+            ok, reason = True, ""
         if not ok:
             self.state.set("error", f"存储不可用，已暂停录像：{reason}")
             return False
+        try:
+            _, free = self._disk_space()
+            min_free = self._min_free_bytes()
+            if min_free > 0 and free < min_free:
+                # 不写 state.error：那是"最近一次错误"且永不清空，
+                # 磁盘空间是可恢复的，挂在红字里反而误导。
+                self.state.update(disk_low=True,
+                                  disk_reason=(f"磁盘剩余空间不足"
+                                               f"（剩 {free // (1024 ** 2)} MB）"))
+                return False
+        except Exception:
+            pass
         return True
 
     def _start_event(self, frame: bytes, now: float, bbox=None,
@@ -523,7 +537,7 @@ class Recorder:
             self._events.insert(0, entry)
             self._save_events()
         self.state.set("events_total", len(self._events))
-        self._purge_if_needed()
+        self.check_disk()
         if self.on_event:
             try:
                 self.on_event("on_motion_end", {**entry, "ok": True})
@@ -546,26 +560,189 @@ class Recorder:
         return jpeg_crop(src, full, (240, 240))
 
     # ------------------------------------------------------------------
-    def _purge_if_needed(self):
-        limit_gb = float(self.config.get("record", "max_disk_gb", default=8) or 0)
-        if limit_gb <= 0:
-            return
-        videos = self.config.media_sub("videos")
+    # 磁盘监测
+    #
+    # 两道护栏，缺一不可：
+    #
+    #   A. 媒体配额  record.max_disk_gb
+    #      媒体目录（录像 + 抓拍 + 延时）的总占用超过配额时，删掉最旧的录像。
+    #
+    #   B. 剩余空间  record.min_free_gb
+    #      目标文件系统的**可用空间**低于下限时，继续删旧媒体腾地方。
+    #
+    # B 是 A 的补充，不是重复：配额可以调得比整块盘还大（128 GB 的配额
+    # 配一块 28.7 GB 的 SD 卡完全合法），此时配额永远触发不了，真正兜底
+    # 的就是"文件系统还剩多少"。只看配额的话，录像会一路写到文件系统
+    # 100% 满——ext4 根分区写满之后日志写不进去、配置存不下、连系统都
+    # 可能起不来。
+    #
+    # 护栏 B 必须在**切换存储目标后立刻重算**：换到 U 盘之后，剩余空间
+    # 跟 SD 卡完全是两回事，沿用旧值会做出错误判断。
+    # ------------------------------------------------------------------
+    def _disk_space(self) -> tuple[int, int]:
+        """目标文件系统的 (总字节, 可用字节)。"""
+        from . import storage as _storage
+        try:
+            return _storage.disk_usage(self.config.media_dir())
+        except Exception:
+            return (0, 0)
+
+    def _oldest_files(self, sub: str) -> list[Path]:
+        """某个媒体子目录下的文件，按修改时间从旧到新排好。"""
+        d = self.config.media_sub(sub)
+        out: list[tuple[float, Path]] = []
+        if not d.exists():
+            return []
+        try:
+            for p in d.iterdir():
+                try:
+                    if p.is_file():
+                        out.append((p.stat().st_mtime, p))
+                except OSError:
+                    continue
+        except OSError:
+            return []
+        out.sort(key=lambda x: x[0])
+        return [p for _, p in out]
+
+    def _drop_video(self, vpath: Path) -> int:
+        """删掉一个录像及其附属抓拍，同时清掉事件索引。返回释放字节数。"""
+        freed = 0
         stills = self.config.media_sub("stills")
-        limit = limit_gb * 1024 ** 3
-        files = sorted(videos.glob("*.mp4"), key=lambda p: p.stat().st_mtime)
-        total = sum(f.stat().st_size for f in files)
-        idx = 0
-        while total > limit and idx < len(files):
-            f = files[idx]
-            total -= f.stat().st_size
-            with self._lock:
-                self._events = [e for e in self._events if e.get("video") != f.name]
-                self._save_events()
-            f.unlink(missing_ok=True)
-            (stills / f"{f.stem}.jpg").unlink(missing_ok=True)
-            (stills / f"{f.stem}_obj.jpg").unlink(missing_ok=True)
-            idx += 1
+        try:
+            freed += vpath.stat().st_size
+        except OSError:
+            pass
+        stem = vpath.stem
+        for name in (f"{stem}.jpg", f"{stem}_obj.jpg"):
+            sp = stills / name
+            try:
+                freed += sp.stat().st_size
+            except OSError:
+                pass
+            try:
+                sp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            vpath.unlink(missing_ok=True)
+        except OSError:
+            pass
+        with self._lock:
+            self._events = [e for e in self._events if e.get("video") != vpath.name]
+            self._save_events()
+        return freed
+
+    def _log(self, msg: str) -> None:
+        if self.log:
+            try:
+                self.log(msg)
+            except Exception:
+                pass
+
+    def _min_free_bytes(self) -> int:
+        """剩余空间护栏的下限（字节）。0 = 关闭该护栏。"""
+        try:
+            gb = float(self.config.get("record", "min_free_gb", default=1) or 0)
+        except (TypeError, ValueError):
+            gb = 0
+        return int(gb * 1024 ** 3)
+
+    def refresh_disk_state(self) -> dict:
+        """轻量刷新：只看目标文件系统的剩余空间，不遍历媒体目录。
+
+        后台每 3 秒跑一次，不能干重活（遍历媒体目录在文件多时很贵）。
+        """
+        total, free = self._disk_space()
+        min_free = self._min_free_bytes()
+        low = min_free > 0 and free < min_free
+        reason = ""
+        if low:
+            reason = (f"磁盘剩余空间不足（剩 {free // (1024 ** 2)} MB，"
+                      f"低于下限 {min_free // (1024 ** 3)} GB）")
+        try:
+            self.state.update(
+                disk_total_bytes=int(total),
+                disk_free_bytes=int(free),
+                disk_low=bool(low),
+                disk_reason=reason,
+            )
+        except Exception:
+            pass
+        return {"total": total, "free": free, "low": low, "reason": reason}
+
+    def check_disk(self) -> dict:
+        """检查磁盘、按需清理，并返回本次检测结果。
+
+        每个事件结束时调用；**切换存储目标后必须调用一次**——
+        新目标的剩余空间和旧目标毫无关系。
+        """
+        quota = int(float(self.config.get("record", "max_disk_gb", default=8) or 0) * 1024 ** 3)
+        min_free = self._min_free_bytes()
+
+        media_dir = self.config.media_dir()
+        used = dir_size(media_dir)
+        total, free = self._disk_space()
+        removed = 0
+
+        # -- 护栏 A：媒体配额 -------------------------------------------
+        if quota > 0 and used > quota:
+            for vpath in self._oldest_files("videos"):
+                if used <= quota:
+                    break
+                used -= self._drop_video(vpath)
+                removed += 1
+            total, free = self._disk_space()
+
+        # -- 护栏 B：文件系统剩余空间 -----------------------------------
+        if min_free > 0 and free < min_free:
+            # 即便把全部媒体删光也补不上这个缺口 → 磁盘是被**别的东西**
+            # 占满的（系统日志、别的应用、其它分区）。这时候删录像毫无
+            # 意义，只会白白毁掉用户的录像历史。直接暂停录像并告警。
+            media_total = dir_size(media_dir)
+            if free + media_total >= min_free:
+                # 先删最旧的录像（连带其抓拍）
+                for vpath in self._oldest_files("videos"):
+                    if free >= min_free:
+                        break
+                    before = free
+                    self._drop_video(vpath)
+                    removed += 1
+                    _, free = self._disk_space()
+                    if free <= before:
+                        # 删了文件但空间没释放 → 空间被别的东西占着，
+                        # 再删也没有意义，停下来保住剩下的历史。
+                        break
+                # 还不够就删延时文件：可再生，优先级低于事件录像
+                if free < min_free:
+                    for tpath in self._oldest_files("timelapse"):
+                        if free >= min_free:
+                            break
+                        before = free
+                        try:
+                            tpath.unlink(missing_ok=True)
+                            removed += 1
+                        except OSError:
+                            continue
+                        _, free = self._disk_space()
+                        if free <= before:
+                            break
+                used = dir_size(media_dir)
+
+        st = self.refresh_disk_state()
+        st["used"] = used
+        st["removed"] = removed
+        try:
+            self.state.update(disk_used_bytes=int(used))
+        except Exception:
+            pass
+        if removed:
+            # 自动删了用户的录像，必须留痕——不然用户回头发现录像没了都不知道怎么回事
+            self._log("disk guard: removed %d old media file(s); "
+                      "free %.1f GB / %.1f GB, quota %s GB"
+                      % (removed, free / 1024 ** 3, total / 1024 ** 3,
+                         self.config.get("record", "max_disk_gb", default=8)))
+        return st
 
     # ------------------------------------------------------------------
     def delete_event(self, eid: str) -> bool:

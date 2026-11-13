@@ -167,6 +167,8 @@
           <input type="range" id="rec-maxev" min="5" max="600" step="5"></label>
         <label class="field"><span><span data-i18n="label.maxDisk">磁盘上限(GB)</span><b class="val" id="v-rec-maxdisk"></b></span>
           <input type="range" id="rec-maxdisk" min="1" max="128" step="1"></label>
+        <label class="field"><span><span data-i18n="label.minFree">剩余空间下限(GB)</span><b class="val" id="v-rec-minfree"></b></span>
+          <input type="range" id="rec-minfree" min="0" max="20" step="0.5"></label>
         <label class="field"><span><span data-i18n="label.crf">编码质量 CRF</span><b class="val" id="v-rec-quality"></b></span>
           <input type="range" id="rec-quality" min="10" max="40" step="1"></label>
         <label class="field"><span data-i18n="label.encoder">编码器</span>
@@ -176,6 +178,8 @@
             <option value="libx264">libx264</option>
           </select></label>
       </div>
+      <p class="hint" id="rec-diskinfo"></p>
+      <p class="hint" data-i18n="hint.diskGuard"></p>
     </div>
 
     <div class="panel">
@@ -239,7 +243,7 @@
     <div class="cols">
       <label class="field"><span data-i18n="label.storageTarget">录像存储目标</span>
         <select id="storage-dir"></select></label>
-      <label class="field"><span data-i18n="label.storageUsage">当前占用</span>
+      <label class="field"><span data-i18n="label.storageFree">剩余空间</span>
         <b class="val" id="storage-usage">–</b></label>
     </div>
     <div class="row" style="margin-top:10px">
@@ -252,6 +256,7 @@
       <button id="btn-storage-apply" class="primary" data-i18n="btn.applyStorage">应用</button>
       <span class="hint" id="storage-hint"></span>
     </div>
+    <p class="hint warn" id="storage-low"></p>
     <p class="hint" data-i18n="hint.storageSafety">安全提示：默认在外部存储被拔出时暂停录像，而不是悄悄写回 SD 卡——否则长期运行会把系统分区撑满。</p>
     <div class="rlist" id="storage-devices" style="margin-top:8px"></div>
   </div>

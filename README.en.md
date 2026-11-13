@@ -389,6 +389,44 @@ curl -s -X POST -H "Content-Type: application/json" \
 
 ---
 
+## Disk monitoring (v2.6.0+)
+
+The "Disk" indicator in the top bar shows the **real free space of the target filesystem**
+(e.g. `free 20.9 GB`) and turns red when it drops below the floor. The detection tab shows the media usage,
+the quota and the free space side by side under the recording parameters.
+
+### The disk limit and the free-space floor are not the same thing
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `record.max_disk_gb` | **Media quota**: the limit for recordings + snapshots + time-lapse in GB (1–128). The oldest recordings are deleted once it is exceeded. | `8` |
+| `record.min_free_gb` | **Free-space floor**: below this much free space on the target filesystem the old media is removed; if that is not enough, recording is paused. `0` switches the guard off. | `1` |
+
+**Why the second one is needed**: the quota may be set larger than the whole disk — `max_disk_gb = 128` on a
+28.7 GB SD card is perfectly valid, but then the quota **never triggers** and recording simply continues until
+the filesystem is 100 % full. An ext4 root partition at 100 % means no log can be written, no configuration can
+be saved, and the device may no longer boot. What actually protects you is "how much space is left", not
+"how much media has piled up".
+
+### Cleaning up never destroys your history
+
+- The **oldest recordings** go first (together with their snapshots); only when the recordings are gone and the
+  gap is still open do the **time-lapse** files go (they can be regenerated);
+- **if deleting all the media still would not close the gap**, the disk is full of something else
+  (system logs, another application, another partition). In that case **not a single recording is deleted** —
+  recording is paused and the alarm goes off instead, because keeping the history matters more than keeping a
+  recording count;
+- Every automatic cleanup is written to the service log (`disk guard: removed N old media file(s)`), so it never
+  happens silently.
+
+### Switching the target re-checks the free space
+
+After switching to an external drive, the free space is **recomputed for the new target**: the API returns the
+fresh result immediately, the background thread re-checks every three seconds, and every candidate device is
+listed with its own usable / total figures.
+
+---
+
 ## Deployment
 
 ### Method 1: Versioned Publishing (recommended)
@@ -543,7 +581,8 @@ systemctl --user restart pikrellcam-lite.service
 | `record.post_seconds` | `8` | Seconds of post-roll after the trigger |
 | `record.event_gap_seconds` | `10` | Minimum interval between two events |
 | `record.max_event_seconds` | `120` | Maximum length of a single event, so continuous motion cannot grow memory without bound |
-| `record.max_disk_gb` | `8` | Size limit of the recording directory; the oldest files are deleted when it is exceeded |
+| `record.max_disk_gb` | `8` | Size limit of the recording directory (media quota in GB, 1–128); the oldest files are deleted when it is exceeded |
+| `record.min_free_gb` | `1` | Free-space floor of the target filesystem in GB; below it the old media is removed, and recording is paused if that is not enough. `0` disables it |
 | `record.encoder` | `auto` | `auto` / `h264_v4l2m2m` / `libx264` (`auto` prefers the hardware encoder and falls back to the software encoder) |
 | `record.frame_write_timeout` | `8` | Longest wait, in seconds, for one frame to reach the encoder; on timeout the encoder is treated as stuck and the recording is abandoned instead of the service |
 | `record.encoder_close_timeout` | `15` | Longest wait, in seconds, for ffmpeg to finish writing the `moov` atom when a recording ends |

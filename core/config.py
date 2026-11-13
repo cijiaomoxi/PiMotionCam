@@ -86,6 +86,9 @@ DEFAULT_CONFIG = {
         "event_gap_seconds": 10,
         "max_event_seconds": 120,
         "max_disk_gb": 8,
+        # 目标文件系统可用空间低于此值时开始清理旧媒体；
+        # 清理后仍不足则暂停录像。0 = 关闭该护栏。
+        "min_free_gb": 1,
         "encoder": "auto",     # auto | h264_v4l2m2m | libx264
         "quality": 23,
         "paused": False,

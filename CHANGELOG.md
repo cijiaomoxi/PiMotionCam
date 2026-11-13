@@ -45,10 +45,19 @@ pulling that drive out no longer silently fills up the SD card.
   result to the runtime state (`storage_available`, `storage_fallback`, `storage_path`, `storage_reason`).
 - A "存储位置 / Storage location" panel on the Media tab: the detected devices, the free space, the two safety
   switches, and the current state. The top bar turns into a warning as soon as the target becomes unavailable.
-- 22 new strings in each language pack (407 in total).
+- 22 new strings in each language pack for the storage panel, plus 9 for the disk monitoring (414 in total).
 - `docs/上游功能对照.md` — an item-by-item comparison against the upstream [billw2/pikrellcam](https://github.com/billw2/pikrellcam):
   which features are covered, which are partially covered, which are missing, and which ones pikrellcam-lite has that
   upstream does not.
+- **A real free-space guard for the disk** (`record.min_free_gb`, 1 GB by default). The disk limit is a *media quota*:
+  it may be set to 128 GB even on a 28.7 GB SD card, and then it never triggers. The free-space floor is what
+  actually protects the card — below it, the oldest recordings are removed automatically, and if that is not enough,
+  recording is paused instead of writing the filesystem to 100 %.
+- The top bar now shows the **real free space** of the target filesystem (`Disk · free 20.9 GB`) instead of
+  "media usage / quota", and turns red when the space drops below the floor. The detection tab shows both numbers
+  side by side under the disk limit slider, plus a new "free space floor" slider.
+- The storage panel lists the **free / total space of every candidate device**, so an external drive can be
+  compared with the SD card before it is selected.
 
 ### Changed
 
@@ -70,6 +79,19 @@ pulling that drive out no longer silently fills up the SD card.
 
 ### Fixed
 
+- **Setting the disk limit above the size of the disk could fill the card.** The limit was compared against the
+  *media files* only, so a 128 GB limit on a 28.7 GB card never triggered: recording simply continued until the
+  filesystem was 100 % full. An ext4 root partition at 100 % means no log can be written, no configuration can be
+  saved and the device may no longer boot. The free-space floor now closes this gap.
+- The disk quota only counted the video files, not the snapshots and the time-lapse clips, while the top bar
+  counted everything — the two numbers never matched. Both now use the same figure.
+- **Switching to an external drive did not re-check the free space.** The guard now re-evaluates the new target
+  immediately after the switch, in the API response and every three seconds in the background.
+- The storage panel labelled the free space as "current usage".
+- The 22 storage strings introduced in v2.6.0 had only been added to the language packs, not to the i18n source
+  table — re-running `tools/apply_i18n.py` would have dropped all of them. They are now in the table as well.
+- `err.activateFailed` and `btn.goto` were missing from the language packs and showed up as raw keys in the
+  interface.
 - **A USB drive that was pulled out could fill up the SD card.** The mount point stays behind as an empty
   directory on the SD card, so a path-existence check happily reported "writable" and the recordings kept going
   into the system partition. Long runs therefore ended with an unbootable device. Three things prevent this now:
@@ -83,6 +105,13 @@ pulling that drive out no longer silently fills up the SD card.
 > Quality assurance: the storage layer was verified with an offline test suite covering mount detection, the
 > unplugged-drive case, `require_mount` on and off, the root-filesystem rejection, and the fallback behaviour. The
 > checks run against a substituted mount table, so they are deterministic and do not need physical hardware.
+>
+> The disk guards were verified with a second offline suite (29 checks) covering: the media quota deleting the
+> oldest recordings, a 128 GB quota on a 28.7 GB disk correctly *not* triggering, the free-space floor taking
+> over when the quota is out of range, the floor being switched off with `min_free_gb = 0`, the time-lapse files
+> being removed only after the recordings are gone, a switch to another target re-evaluating against the new
+> filesystem, a disk that is full of foreign data **not** deleting the recordings (the history is preserved and
+> recording is paused instead), and the deletion stopping when the space does not actually free up.
 
 ---
 

@@ -468,6 +468,64 @@ EXTRA = {
     "detail.enabled": ("启用", "Enabled"),
     "detail.disabled": ("停用", "Disabled"),
     "err.loginFailed": ("登录失败", "Sign-in failed"),
+
+    # --- 既有缺口：v2.6.0 的语言包里漏了这两条，界面上会直接显示 key ---
+    "err.activateFailed": ("激活失败", "Failed to activate"),
+    "btn.goto": ("转到", "Go to"),
+
+    # --- 存储位置面板（v2.6.0 起）---
+    # 这些 key 在 HTML / JS 里已写成 data-i18n / t('key') 的形式，
+    # 不会被字面量扫描器收录，必须在这里登记，否则重新生成语言包时会丢。
+    "panel.storage": ("存储位置", "Storage location"),
+    "label.storageTarget": ("录像存储目标", "Recording storage target"),
+    "label.storageFree": ("剩余空间", "Free space"),
+    "label.storageRequireMount": ("目标必须是挂载点", "Target must be a mount point"),
+    "label.storageFallback": ("设备拔出时回退到内置存储",
+                              "Fall back to internal storage when the device is removed"),
+    "btn.applyStorage": ("应用存储设置", "Apply storage settings"),
+    "toast.storageSaved": ("存储设置已保存", "Storage settings saved"),
+    "err.storageSaveFailed": ("保存存储设置失败：", "Failed to save storage settings: "),
+    "hint.storageSafety": (
+        "安全提示：默认在外部存储被拔出时暂停录像，而不是悄悄写回 SD 卡——"
+        "否则长期运行会把系统分区撑满，设备无法启动。",
+        "Safety: by default recording is paused when the external storage is removed "
+        "instead of silently writing back to the SD card — otherwise long runs fill "
+        "up the system partition and the device stops booting."),
+    "storage.internal": ("内置存储", "Internal storage"),
+    "storage.internalOption": ("内置存储（SD 卡）", "Internal storage (SD card)"),
+    "storage.external": ("外部存储", "External storage"),
+    "storage.usb": ("USB 存储", "USB storage"),
+    "storage.sdcard": ("SD 卡", "SD card"),
+    "storage.unknown": ("未知", "Unknown"),
+    "storage.free": ("可用", "free"),
+    "storage.usageLine": ("可用 {free} / 共 {total}", "usable {free} / {total} total"),
+    "storage.ok": ("可用", "Available"),
+    "storage.unavailable": ("不可用", "Unavailable"),
+    "storage.fallback": ("已回退", "Fell back"),
+    "storage.lowSpace": ("磁盘剩余空间不足", "Not enough free disk space"),
+    "storage.noDevices": (
+        "未检测到外部存储设备，插入 U 盘后点“刷新列表”。",
+        "No external storage device detected. Plug in a USB drive and click “Refresh list”."),
+    "storage.paused": ("存储不可用：{r}。录像已暂停。",
+                       "Storage unavailable: {r}. Recording is paused."),
+    "storage.fallbackNote": (
+        "{r}。当前已回退到内置存储，外部存储恢复后会自动切回。",
+        "{r}. Recording is using internal storage for now; it switches back "
+        "automatically when the external storage returns."),
+
+    # --- 磁盘监测（v2.6.1 起）---
+    "metric.diskFree": ("剩余", "Free"),
+    "label.minFree": ("剩余空间下限(GB)", "Free space floor (GB)"),
+    "label.diskNow": (
+        "媒体占用 {used} / 配额 {quota} · 磁盘剩余 {free} / 共 {total}",
+        "Media {used} / quota {quota} · disk free {free} / {total}"),
+    "hint.diskGuard": (
+        "磁盘上限是媒体配额，可以调到 128 GB（比整块盘还大也没关系）；"
+        "真正兜底的是剩余空间下限：低于它会自动清理最旧的录像，仍然不足则暂停录像。",
+        "The disk limit is a media quota and may be set up to 128 GB (larger than the "
+        "whole disk is fine). What really protects you is the free-space floor: "
+        "below it the oldest recordings are removed automatically, and recording is "
+        "paused if that is not enough."),
 }
 
 

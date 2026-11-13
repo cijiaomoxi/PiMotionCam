@@ -36,14 +36,16 @@ class AppService:
         self.state = RuntimeState()
         self.hooks = Hooks(self.config, log=self.log)
         self.detector = Detector(self.config)
-        self.recorder = Recorder(self.config, self.state, on_event=self._on_event)
+        self.recorder = Recorder(self.config, self.state, on_event=self._on_event,
+                                 log=self.log)
         self.camera = Camera(self.config, self.state, self.detector, self.recorder,
                              log=self.log)
         self.presets = Presets(self.config, self.state, on_camera_changed=self._restart_camera)
         self.timelapse = Timelapse(self.config, self.state, self.camera, self.hooks, log=self.log)
         self.servo = Servo(self.config, self.state, log=self.log)
         self.scheduler = Scheduler(self.config, self.run_command, log=self.log)
-        self.storage = StorageMonitor(self.config, self.state, log=self.log)
+        self.storage = StorageMonitor(self.config, self.state, log=self.log,
+                                     on_disk=self.recorder.refresh_disk_state)
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------

@@ -31,6 +31,12 @@ class RuntimeState:
         "storage_fallback": False,
         "storage_path": "",
         "storage_reason": "",
+        # 磁盘监测：目标文件系统的真实剩余空间
+        "disk_total_bytes": 0,
+        "disk_free_bytes": 0,
+        "disk_used_bytes": 0,
+        "disk_low": False,
+        "disk_reason": "",
     }
 
     def __init__(self):
