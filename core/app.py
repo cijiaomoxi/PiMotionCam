@@ -229,6 +229,28 @@ class AppService:
                     self.servo.enable()
                     return "servo enabled"
 
+            if verb == "loop":
+                arg = (args[0].lower() if args else "status")
+                if arg in ("on", "start", "true", "1"):
+                    self.recorder.set_loop_enabled(True)
+                    return "loop on"
+                if arg in ("off", "stop", "false", "0"):
+                    self.recorder.set_loop_enabled(False)
+                    return "loop off"
+                st = self.recorder.loop_stats()
+                return ("loop %s segments=%d bytes=%d recording=%s"
+                        % ("on" if st.get("enabled") else "off",
+                           st.get("segments", 0), st.get("bytes", 0),
+                           st.get("recording", False)))
+
+            if verb == "imaging":
+                # 只读查询当前成像参数；改参数走网页的成像参数面板
+                st = self.camera.imaging_status()
+                vals = st.get("values", {})
+                return ("imaging backend=%s brightness=%s contrast=%s saturation=%s"
+                        % (st.get("backend"), vals.get("brightness"),
+                           vals.get("contrast"), vals.get("saturation")))
+
             if verb == "start":
                 self.start()
                 return "started"

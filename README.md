@@ -92,6 +92,8 @@
 | 画面旋转 / 镜像 | ✅ 0/180 由 ISP 零成本完成，90/270 自动软件旋转（v2.4.0+） |
 | 卡死自愈 | ✅ 取帧看门狗 + 自动降级（分辨率→帧率→回退 RGB888），管线僵死自动重建（v2.3.0+） |
 | 多语言界面 | ✅ 简体中文 / English 双语，前后端共用同一份语言包，顶栏一键切换（v2.5.0+） |
+| 循环录像 loop | ✅ 连续录像按固定时长切段，占用超上限删最旧段；遇移动让位给事件录像（v2.7.0+） |
+| 成像参数矩阵 | ✅ 亮度/对比度/饱和/锐度/降噪/曝光/测光/曝光补偿/ISO/快门/白平衡/数字变焦，三条通路各自落地（v2.7.0+） |
 | 视频/抓拍/延时/归档页面 | ✅ 媒体标签页 + 远程归档（scp） |
 | 系统日志页面 | ✅ 实时滚动日志 |
 | 帮助页面 | ✅ 内置说明 |
@@ -401,6 +403,97 @@ curl -s -X POST -H "Content-Type: application/json" \
 
 ---
 
+## 循环录像（v2.7.0+）
+
+「媒体」标签页里有一块「循环录像」面板。打开之后相机会持续录像，并按设定的时长切成一段一段，
+存放在 `media/loop/` 下。
+
+| 参数 | 含义 | 默认 |
+| --- | --- | --- |
+| `loop.enabled` | 是否启用循环录像 | `false` |
+| `loop.segment_seconds` | 每段录像的时长（秒） | `60` |
+| `loop.max_disk_percent` | 循环录像最多占**整块文件系统**的百分比，超出就删最旧的段 | `30` |
+| `loop.quality` | 循环录像的 CRF（比事件录像略省空间） | `26` |
+
+占用比例按**文件系统总容量**算，和上游的 `loop_diskusage_percent` 一个口径——
+这样换到 U 盘之后这个百分比依然有意义。
+
+### 循环录像和事件录像不能同时录
+
+树莓派的 H.264 硬件编码器在 `/dev/video31` 上，**同一时刻只能有一个 ffmpeg 实例**用它；
+本项目的采集线程也是单线程喂一路编码器。所以两路录像在硬件层面就不可能并行，
+只能做成**状态互斥**（和上游的 `VCB_STATE_LOOP_RECORD` / `VCB_STATE_MOTION_RECORD` 一样）：
+
+```
+平时      → 循环录像写盘
+检测到移动 → 收尾当前循环段 → 事件录像接管硬件编码器
+事件结束   → 循环录像自动恢复（下一帧开新段）
+```
+
+所以「循环录像 + 移动侦测」同时开着时，事件发生的那几秒画面属于**事件录像**，
+不在循环段里——这是硬件约束，不是取舍。
+
+### 磁盘满了先回收哪一类
+
+v2.6.0 的两道护栏（媒体配额、剩余空间下限）现在也会回收循环录像段，
+**回收顺序是：循环段 → 事件录像 → 延时摄影**。
+
+循环录像本来就是覆盖式录像，「旧的让位给新的」正是它的语义；
+而事件录像带着具体的触发时刻，优先级高于循环段。
+
+---
+
+## 成像参数矩阵（v2.7.0+）
+
+「侦测调参」标签页里有一块「成像参数」面板，共 14 项：
+
+| 参数 | 范围 | 正常值 | 说明 |
+| --- | --- | --- | --- |
+| 亮度 `brightness` | 0～100 | 50 | 整体明暗 |
+| 对比度 `contrast` | -100～100 | 0 | 明暗对比强度 |
+| 饱和度 `saturation` | -100～100 | 0 | 拉到 -100 就是纯黑白 |
+| 锐度 `sharpness` | -100～100 | 0 | 边缘锐化 |
+| 降噪 `denoise` | auto / off / cdn_fast / cdn_hq | auto | 夜间噪点多时调高 |
+| 曝光模式 `exposure` | normal / sport | normal | sport 会缩短曝光时间 |
+| 测光 `metering` | centre / spot / average / custom | centre | 决定自动曝光参考哪部分画面 |
+| 曝光补偿 `ev` | -10～10 | 0 | 正数变亮、负数变暗 |
+| ISO 增益 `iso` | 0～3200 | 0（自动） | 固定模拟增益 |
+| 快门 `shutter` | 0～500000 µs | 0（自动） | 固定快门时间 |
+| 白平衡 `awb` | auto / daylight / cloudy / … | auto | 夜间色偏时选固定色温 |
+| 红 / 蓝增益 `awb_r_gain` / `awb_b_gain` | 0～3 | 0（自动） | 手动白平衡 |
+| 数字变焦 `zoom` | 100～300 % | 100 | 中心裁剪，会损失分辨率 |
+
+取值范围刻意与上游 MMAL 版的语义对齐，方便从官方配置迁移。
+
+### 三条采集通路，三种落地方式
+
+| 通路 | 参数怎么生效 | 改参数要重启吗 |
+| --- | --- | --- |
+| CSI + rpicam-vid（ISP 硬件 JPEG） | 转成命令行参数 | **要**，这些是启动参数 |
+| CSI + picamera2 / libcamera（原始 RGB） | `set_controls()` | 不用，热更新 |
+| USB 摄像头 | `v4l2-ctl --set-ctrl` | 不用，热更新 |
+
+USB 摄像头到底支持哪些参数**必须现查**：先用 `--list-ctrls` 列出控件和量程，
+再把统一参数线性映射到每个控件自己的范围；摄像头没有的控件会被跳过，
+并在界面上标成「不支持」（置灰）。
+
+### 控件是自动生成的
+
+面板上的控件**不是写死在 HTML 里的**，而是照着后端 `/api/imaging` 返回的参数表现场生成。
+加一个新参数只需要改 `core/imaging.py` 里的 `SPECS`，前后端都不用动。
+
+```bash
+# 查看当前成像参数与通路
+curl -s http://<pi>:8080/api/imaging | python3 -m json.tool
+
+# 改参数（会自动保存并应用）
+curl -s -X POST http://<pi>:8080/api/imaging \
+  -H 'Content-Type: application/json' \
+  -d '{"values":{"brightness":60,"contrast":10,"awb":"daylight"}}'
+```
+
+---
+
 ## 部署
 
 ### 方式一：版本化发布（推荐）
@@ -531,6 +624,7 @@ systemctl --user restart pikrellcam-lite.service
 | `ae_constraint` | `normal` | AE 测光模式：`normal` / `highlight` / `shadows` / `custom` |
 | `stall_timeout` | `8.0` | 取帧看门狗：超过该秒数没有新帧就重建采集管线 |
 | `min_fps` | `0.5` | 帧率下限：低于该值持续 `stall_timeout` 秒同样判定为卡死 |
+| `imaging.*` | 见上表 | 成像参数矩阵（14 项），取值与语义见「成像参数矩阵」一节 |
 
 ### motion
 
@@ -569,6 +663,10 @@ systemctl --user restart pikrellcam-lite.service
 | `servo.pan_pin` / `tilt_pin` | `18` / `17` | BCM 引脚号 |
 | `servo.positions` | 3 个预设 | `[{name,pan,tilt}]`，每个位置可绑定设置预设 |
 | `hooks.*` | `""` | 事件钩子命令，支持 `{id} {video} {thumb} {time} {date} {duration} {algorithm} {region} {media_dir}` 占位符 |
+| `loop.enabled` | `false` | 是否启用循环录像 |
+| `loop.segment_seconds` | `60` | 循环录像每段时长（秒） |
+| `loop.max_disk_percent` | `30` | 循环录像最多占整块文件系统的百分比，超出删最旧的段 |
+| `loop.quality` | `26` | 循环录像的 CRF |
 
 ---
 

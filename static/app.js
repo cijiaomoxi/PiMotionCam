@@ -189,6 +189,12 @@ function renderState(s) {
   setText('m-preset', s.preset || t('state.notSelected'));
   setText('ver', s.version || '–');
 
+  // 循环录像状态跟着 /api/state 一起刷新（每秒一次）
+  if (s.loop) {
+    LOOP = s.loop;
+    if ($('loop-tag')) renderLoop();
+  }
+
   // OSD 叠加层
   setText('osd-time', hhmmss());
   const badge = $('osd-badge');
@@ -634,16 +640,19 @@ function fillSelect(sel, options, value) {
   sel.value = v;
 }
 
+/** 设置滑块的值并同步旁边的数字读数。 */
+function setRangeValue(id, vid, v, fmt) {
+  const el = $(id);
+  if (!el) return;
+  el.value = v;
+  setText(vid, fmt ? fmt(v) : v);
+}
+
 function fillConfig() {
   if (!CFG) return;
   const cam = CFG.camera || {}, rec = CFG.record || {}, tl = CFG.timelapse || {}, mo = CFG.motion || {};
 
-  const setRange = (id, vid, v, fmt) => {
-    const el = $(id);
-    if (!el) return;
-    el.value = v;
-    setText(vid, fmt ? fmt(v) : v);
-  };
+  const setRange = setRangeValue;
   setRange('rec-pre', 'v-rec-pre', rec.pre_seconds, (v) => v + ' s');
   setRange('rec-post', 'v-rec-post', rec.post_seconds, (v) => v + ' s');
   setRange('rec-gap', 'v-rec-gap', rec.event_gap_seconds, (v) => v + ' s');
@@ -713,6 +722,215 @@ async function saveConfig() {
     await loadConfig();
     toast(t('toast.configSaved'), 'ok');
   } catch (e) { toast(t('err.saveConfig') + e.message, 'err'); }
+}
+
+/* =====================================================================
+ * 成像参数矩阵
+ *
+ * 控件不是写死在 HTML 里的，而是照着后端 /api/imaging 返回的 schema
+ * 现场生成：加一个参数只要改 core/imaging.py 的 SPECS，前后端都不用动。
+ * ===================================================================*/
+let IMAGING = null;
+
+const IMAGING_GROUP_ORDER = ['tone', 'exposure', 'color'];
+
+function imagingValueText(spec, v) {
+  if (spec.type === 'enum') {
+    const o = (spec.options || []).find((x) => x.value === v);
+    return o ? t(o.label) : String(v);
+  }
+  if (spec.auto !== undefined && Number(v) === Number(spec.auto)) return t('common.auto');
+  return spec.unit ? String(v) + ' ' + spec.unit : String(v);
+}
+
+function buildImagingControls() {
+  const box = $('imaging-box');
+  if (!box || !IMAGING || !IMAGING.schema) return;
+  const groups = {};
+  IMAGING.schema.forEach((s) => {
+    if (!groups[s.group]) groups[s.group] = [];
+    groups[s.group].push(s);
+  });
+  const order = IMAGING_GROUP_ORDER.concat(
+    Object.keys(groups).filter((g) => IMAGING_GROUP_ORDER.indexOf(g) < 0));
+
+  let html = '';
+  order.forEach((g) => {
+    const items = groups[g] || [];
+    if (!items.length) return;
+    html += '<div class="imgroup"><h3>' + esc(t('imaging.group.' + g)) + '</h3><div class="cols">';
+    items.forEach((s) => {
+      const id = 'img-' + s.key;
+      let ctrl;
+      if (s.type === 'enum') {
+        ctrl = '<select id="' + id + '">' + s.options.map((o) =>
+          '<option value="' + esc(o.value) + '">' + esc(t(o.label)) + '</option>').join('') +
+          '</select>';
+      } else {
+        ctrl = '<input type="range" id="' + id + '" min="' + s.min + '" max="' + s.max +
+          '" step="' + s.step + '">';
+      }
+      html += '<label class="field" data-imgkey="' + esc(s.key) + '"' +
+        (s.help ? ' title="' + esc(t(s.help)) + '"' : '') + '>' +
+        '<span>' + esc(t(s.label)) + '<b class="val" id="v-' + id + '"></b></span>' +
+        ctrl + '</label>';
+    });
+    html += '</div></div>';
+  });
+  box.innerHTML = html;
+  fillImaging();
+  bindImaging();
+}
+
+function fillImaging() {
+  if (!IMAGING) return;
+  const vals = IMAGING.values || {};
+  const sup = IMAGING.supported || {};
+  (IMAGING.schema || []).forEach((s) => {
+    const el = $('img-' + s.key);
+    if (!el) return;
+    const v = vals[s.key] !== undefined && vals[s.key] !== null ? vals[s.key] : s.default;
+    el.value = v;
+    setText('v-img-' + s.key, imagingValueText(s, v));
+    const wrap = el.closest('[data-imgkey]');
+    if (!wrap) return;
+    const ok = sup[s.key] !== false;
+    wrap.classList.toggle('dim', !ok);
+    el.disabled = !ok;
+    if (!ok && !wrap.getAttribute('data-unsup')) {
+      wrap.setAttribute('data-unsup', '1');
+      wrap.title = t('imaging.notSupported');
+    }
+  });
+}
+
+function bindImaging() {
+  (IMAGING && IMAGING.schema ? IMAGING.schema : []).forEach((s) => {
+    const el = $('img-' + s.key);
+    if (!el) return;
+    const upd = () => setText('v-img-' + s.key, imagingValueText(s, el.value));
+    el.addEventListener('input', upd);
+    el.addEventListener('change', upd);
+  });
+}
+
+function collectImaging() {
+  const out = {};
+  ((IMAGING && IMAGING.schema) || []).forEach((s) => {
+    const el = $('img-' + s.key);
+    if (!el) return;
+    out[s.key] = s.type === 'enum' ? el.value : Number(el.value);
+  });
+  return out;
+}
+
+async function loadImaging() {
+  try {
+    IMAGING = await GET('/api/imaging');
+    buildImagingControls();
+    const b = IMAGING.backend || '';
+    const names = {
+      rpicam: t('imaging.backendRpicam'),
+      libcamera: t('imaging.backendLibcamera'),
+      v4l2: t('imaging.backendV4l2')
+    };
+    setText('imaging-backend', names[b] || b || '–');
+    const uns = (IMAGING.unsupported || []).length;
+    setText('imaging-hint', uns ? t('imaging.unsupported', { n: uns }) : '');
+  } catch (e) { /* 忽略 */ }
+}
+
+async function saveImaging() {
+  const btn = $('btn-imaging-save');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await POST('/api/imaging', { values: collectImaging() });
+    IMAGING = r;
+    buildImagingControls();
+    setText('imaging-hint', r.message || t('toast.imagingSaved'));
+    toast(t('toast.imagingSaved'), 'ok');
+    setTimeout(() => setText('imaging-hint', ''), 3000);
+  } catch (e) {
+    toast(t('err.saveImaging') + e.message, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function resetImaging() {
+  const out = {};
+  ((IMAGING && IMAGING.schema) || []).forEach((s) => { out[s.key] = s.default; });
+  try {
+    const r = await POST('/api/imaging', { values: out });
+    IMAGING = r;
+    buildImagingControls();
+    toast(t('toast.imagingReset'), 'ok');
+  } catch (e) {
+    toast(t('err.saveImaging') + e.message, 'err');
+  }
+}
+
+/* =====================================================================
+ * 循环录像（loop）
+ * ===================================================================*/
+let LOOP = null;
+
+function renderLoop() {
+  if (!LOOP) return;
+  const tag = $('loop-tag');
+  if (tag) {
+    tag.textContent = LOOP.enabled
+      ? (LOOP.recording ? t('loop.recording') : t('loop.enabled'))
+      : t('loop.disabled');
+    tag.classList.toggle('warn', !LOOP.enabled);
+  }
+  setText('loop-detail', t('loop.detail', {
+    n: LOOP.segments || 0,
+    size: bytes(LOOP.bytes || 0),
+    limit: bytes(LOOP.limit_bytes || 0)
+  }));
+  if ($('loop-enabled')) $('loop-enabled').checked = !!LOOP.enabled;
+  setRangeValue('loop-seg', 'v-loop-seg', LOOP.segment_seconds, (v) => v + ' s');
+  setRangeValue('loop-pct', 'v-loop-pct', LOOP.max_disk_percent, (v) => v + ' %');
+  setRangeValue('loop-q', 'v-loop-q', LOOP.quality, (v) => 'CRF ' + v);
+}
+
+async function loadLoop() {
+  try {
+    LOOP = await GET('/api/loop');
+    renderLoop();
+  } catch (e) { /* 忽略 */ }
+}
+
+async function saveLoop() {
+  const body = {
+    enabled: $('loop-enabled') ? $('loop-enabled').checked : false,
+    segment_seconds: +$('loop-seg').value,
+    max_disk_percent: +$('loop-pct').value,
+    quality: +$('loop-q').value
+  };
+  try {
+    LOOP = await POST('/api/loop', body);
+    renderLoop();
+    toast(t('toast.loopSaved'), 'ok');
+  } catch (e) {
+    toast(t('err.saveLoop') + e.message, 'err');
+  }
+}
+
+async function purgeLoop() {
+  if (!(await modal({
+    title: t('btn.purgeLoop'),
+    text: t('confirm.purgeLoop'),
+    okText: t('btn.delete')
+  }))) return;
+  try {
+    await POST('/api/purge', { what: 'loop' });
+    await loadLoop();
+    toast(t('toast.loopPurged'), 'ok');
+  } catch (e) {
+    toast(t('err.opFailed') + e.message, 'err');
+  }
 }
 
 /* 配置预设 */
@@ -1564,8 +1782,8 @@ $('btn-logout').addEventListener('click', async () => {
 
 const TAB_LOADERS = {
   preview: () => { loadRegions(); loadConfig(); },
-  detect: () => { loadConfig(); loadAlgo(); loadPresets(); },
-  media: () => { loadEvents(); loadFiles('videos'); loadFiles('stills'); loadTimelapse(); loadStorage(); },
+  detect: () => { loadConfig(); loadAlgo(); loadPresets(); loadImaging(); },
+  media: () => { loadEvents(); loadFiles('videos'); loadFiles('stills'); loadTimelapse(); loadStorage(); loadLoop(); },
   schedule: () => { loadSchedules(); },
   servo: () => { loadServo(); },
   system: () => { loadHooks(); loadHelp(); loadSystem(); loadLog(); loadCameras(); loadReleaseInfo(); }
@@ -1620,7 +1838,10 @@ function bindRanges() {
     ['cam-rot', 'v-cam-rot', (v) => v + '°'],
     ['cam-detfps', 'v-cam-detfps', (v) => v + ' fps'],
     ['cam-exp', 'v-cam-exp', (v) => (v < 0 ? t('common.auto') : v)],
-    ['tl-period', 'v-tl-period', (v) => v + ' s']
+    ['tl-period', 'v-tl-period', (v) => v + ' s'],
+    ['loop-seg', 'v-loop-seg', (v) => v + ' s'],
+    ['loop-pct', 'v-loop-pct', (v) => v + ' %'],
+    ['loop-q', 'v-loop-q', (v) => 'CRF ' + v]
   ];
   cfgRanges.forEach((r) => {
     const el = $(r[0]);
@@ -1688,6 +1909,8 @@ async function init() {
   await loadRegions();
   await loadPresets();
   await loadCameras();
+  await loadImaging();
+  await loadLoop();
   await pollState();
 
   // 支持 #system 之类的锚点直达
@@ -1701,6 +1924,11 @@ async function init() {
   $('btn-preview-cam').addEventListener('click', applyCamera);
   $('cam-select').addEventListener('change', applyCamera);
   $('preview-cam-select').addEventListener('change', applyCamera);
+
+  $('btn-imaging-save').addEventListener('click', saveImaging);
+  $('btn-imaging-reset').addEventListener('click', resetImaging);
+  $('btn-loop-save').addEventListener('click', saveLoop);
+  $('btn-loop-purge').addEventListener('click', purgeLoop);
 
   setInterval(pollState, 1000);
   setInterval(loadLog, 1000);

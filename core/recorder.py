@@ -104,6 +104,22 @@ class Recorder:
         self._ffmpeg_err_fh = None
         self._tmp = Path("/tmp/pikrellcam-lite")
         self._events: list[dict] = []
+        # --- 循环录像（loop） ---
+        # 与事件录像**互斥**：硬件编码器同一时刻只能有一个 ffmpeg 实例，
+        # 所以 loop 段与事件不能并行写。检测到移动时 loop 让位，事件结束后恢复。
+        self._loop_enabled = False
+        self._loop_active = False
+        self._loop_proc: subprocess.Popen | None = None
+        self._loop_id: str | None = None
+        self._loop_start = 0.0
+        self._loop_frames = 0
+        self._loop_index = 0
+        self._loop_stuck = False
+        self._loop_fail_at = 0.0
+        self._loop_yielded = False
+        self._loop_closed = 0
+        self._loop_bytes = 0
+        self._loop_scan_at = 0.0
         # 事件索引固定放在内置存储：外部存储拔出/换盘时索引不会丢
         self._events_file = config.internal_media_dir() / "events.json"
         self._legacy_events_file = config.media_sub("events.json")
@@ -173,9 +189,13 @@ class Recorder:
         self.state.set("error", f"已清理 {len(broken)} 个未正常收尾的录像文件")
 
     # ------------------------------------------------------------------
-    def _encoder_cmd(self, out_path: Path, force: str | None = None) -> tuple[list[str], str]:
+    def _encoder_cmd(self, out_path: Path, force: str | None = None,
+                     quality: int | None = None) -> tuple[list[str], str]:
         fps = max(1, int(self.config.get("camera", "fps", default=10)))
-        quality = int(self.config.get("record", "quality", default=23))
+        if quality is None:
+            quality = int(self.config.get("record", "quality", default=23))
+        else:
+            quality = int(quality)
         want = (force or self.config.get("record", "encoder", default="auto") or "auto").lower()
 
         base = [
@@ -213,6 +233,11 @@ class Recorder:
                 with self._lock:
                     if self._in_event or self._proc is not None:
                         self._finish_event(now)
+            # 循环录像段同样要收尾，不然会留下一个缺 moov 的坏文件
+            if self._loop_active or self._loop_proc is not None:
+                with self._lock:
+                    if self._loop_active or self._loop_proc is not None:
+                        self._finish_loop_segment(now)
             return
         with self._lock:
             if not self._in_event:
@@ -228,7 +253,13 @@ class Recorder:
 
             if not self._in_event:
                 if motion and can_start:
+                    # 事件优先：循环录像让位，把硬件编码器交给事件录像。
+                    if self._loop_active:
+                        self._finish_loop_segment(now)
                     self._start_event(frame, now, bbox, algorithm, region)
+                    return
+                # 没有事件（或事件间隔未到）：循环录像继续写。
+                self._loop_tick(frame, now)
                 return
 
             # 事件进行中
@@ -305,6 +336,9 @@ class Recorder:
         # 存储不可用时直接放弃本次事件（不启动 ffmpeg）
         if not self._storage_ready():
             return
+        # 循环录像让位：事件期间 loop 处于暂停状态
+        self._loop_yielded = bool(self.config.get("loop", "enabled", default=False))
+        self.state.update(loop_yielded=self._loop_yielded)
         self._event_id = time.strftime("%Y%m%d_%H%M%S")
         self._event_start = now
         self._event_frames = 0
@@ -469,6 +503,9 @@ class Recorder:
 
         self._in_event = False
         self._last_event_end = now
+        # 事件结束 → 循环录像可以恢复（下一帧就会开新段）
+        self._loop_yielded = False
+        self.state.update(loop_yielded=False)
         self.state.update(recording=False)
 
         eid = self._event_id
@@ -543,6 +580,295 @@ class Recorder:
                 self.on_event("on_motion_end", {**entry, "ok": True})
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # 循环录像（loop）
+    #
+    # 与上游一致的语义：持续录像、按固定时长切段、超出配额就删最旧的段。
+    # 与上游不同的是**互斥**这一条必须做对：
+    #
+    #   树莓派的 H.264 硬件编码器走 /dev/video31，同一时刻只能有一个
+    #   ffmpeg 实例在用。lite 的采集线程是单线程喂帧的，所以 loop 段和
+    #   事件录像**不可能并行**。真要并行，第二路要么退化成软件编码
+    #   （CPU 扛不住），要么直接把硬件编码器抢走导致另一个卡死。
+    #
+    #   所以这里走状态互斥：检测到移动 → loop 收尾让位 → 事件录像 →
+    #   事件结束 → loop 自动恢复（下一帧重新开一段）。
+    # ------------------------------------------------------------------
+    def _loop_tick(self, frame: bytes, now: float) -> None:
+        """循环录像的逐帧处理。调用方已持有 self._lock。"""
+        if not self.config.get("loop", "enabled", default=False):
+            if self._loop_active or self._loop_proc is not None:
+                self._finish_loop_segment(now)
+            return
+
+        if self._loop_active:
+            seg = self._loop_segment_seconds()
+            if (now - self._loop_start) >= seg:
+                # 段用满了：收尾并开新段（用当前帧当新段的第 1 帧）
+                self._finish_loop_segment(now)
+                self._start_loop_segment(frame, now)
+                return
+            if not self._write_loop(frame):
+                # 编码器卡死：收掉这一段，下一帧重新开始
+                self._finish_loop_segment(now)
+            return
+
+        self._start_loop_segment(frame, now)
+
+    def _loop_segment_seconds(self) -> float:
+        try:
+            seg = float(self.config.get("loop", "segment_seconds", default=60) or 60)
+        except (TypeError, ValueError):
+            seg = 60.0
+        return max(5.0, min(3600.0, seg))
+
+    def _start_loop_segment(self, frame: bytes, now: float) -> None:
+        """开一个新的循环录像段。调用方已持有 self._lock。"""
+        if not self._storage_ready():
+            return
+        cool = float(self.config.get("record", "encoder_cooldown", default=60) or 60)
+        if self._loop_stuck and (time.time() - self._loop_fail_at) < cool:
+            # 编码器刚刚卡死过，冷却期内不再反复尝试
+            return
+        self._loop_stuck = False
+
+        d = self.config.loop_dir()
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            self.state.set("error", f"循环录像目录不可用: {exc}")
+            return
+
+        self._loop_index += 1
+        name = "loop_%s_%04d.mp4" % (time.strftime("%Y%m%d_%H%M%S"), self._loop_index)
+        out = d / name
+        try:
+            quality = int(self.config.get("loop", "quality", default=26) or 26)
+        except (TypeError, ValueError):
+            quality = 26
+        cmd, enc = self._encoder_cmd(out, quality=quality)
+        self._encoder_name = enc
+        try:
+            self._loop_proc = self._spawn_encoder(cmd)
+        except Exception as exc:  # noqa: BLE001
+            self.state.set("error", f"循环录像启动失败: {exc}")
+            self._loop_proc = None
+            return
+
+        self._loop_active = True
+        self._loop_id = name
+        self._loop_start = now
+        self._loop_frames = 0
+        self._write_loop(frame)
+        self.state.update(loop_recording=True)
+
+    def _write_loop(self, frame: bytes) -> bool:
+        """把一帧写进循环录像的 ffmpeg。
+
+        与事件录像的 _write 分开：循环录像卡死时不能把事件录像也一起
+        拖下水（事件的冷却期会让移动录像整整一分钟录不上）。
+        """
+        proc = self._loop_proc
+        if not proc or not proc.stdin:
+            return False
+        err: list[BaseException] = []
+
+        def _do():
+            try:
+                proc.stdin.write(frame)
+            except BaseException as exc:  # noqa: BLE001
+                err.append(exc)
+
+        timeout = float(self.config.get("record", "frame_write_timeout", default=8) or 8)
+        t = threading.Thread(target=_do, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive() or err:
+            self._loop_proc = None
+            self._loop_stuck = True
+            self._loop_fail_at = time.time()
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return False
+        self._loop_frames += 1
+        return True
+
+    def _finish_loop_segment(self, now: float) -> None:
+        """收尾当前循环录像段。调用方已持有 self._lock。"""
+        proc = self._loop_proc
+        self._loop_proc = None
+        was_active = self._loop_active
+        self._loop_active = False
+        self.state.update(loop_recording=False)
+        if not was_active and proc is None:
+            self._loop_id = None
+            return
+
+        closed_ok = True
+        if proc:
+            closed_ok = self._close_encoder(proc)
+
+        name = self._loop_id
+        self._loop_id = None
+        self._loop_frames = 0
+        if not name:
+            return
+        path = self.config.loop_dir() / name
+        try:
+            if not path.exists() or path.stat().st_size == 0:
+                path.unlink(missing_ok=True)
+                return
+            if not closed_ok or not _mp4_has_moov(path):
+                # 没收尾的文件播放器打不开，留着只会让列表里出现坏条目
+                path.unlink(missing_ok=True)
+                self._log(f"loop 段 {name} 未正常收尾，已清理")
+                return
+        except OSError:
+            return
+        self._loop_closed += 1
+        try:
+            self._loop_bytes += path.stat().st_size
+        except OSError:
+            pass
+        self._loop_check_disk()
+
+    def _oldest_loop_files(self) -> list[Path]:
+        """循环录像目录下的段文件，按修改时间从旧到新排好。"""
+        d = self.config.loop_dir()
+        out: list[tuple[float, Path]] = []
+        try:
+            for p in d.iterdir():
+                try:
+                    if p.is_file() and p.suffix.lower() == ".mp4":
+                        out.append((p.stat().st_mtime, p))
+                except OSError:
+                    continue
+        except OSError:
+            return []
+        out.sort(key=lambda x: x[0])
+        return [p for _, p in out]
+
+    def _drop_loop(self, path: Path) -> int:
+        """删掉一个循环录像段，返回释放的字节数。"""
+        freed = 0
+        try:
+            freed = path.stat().st_size
+        except OSError:
+            pass
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return freed
+
+    def _loop_check_disk(self) -> int:
+        """按**文件系统总容量的百分比**控制循环录像占用。
+
+        与上游的 loop_diskusage_percent 口径一致：算的是"占整块盘多少"，
+        而不是"占媒体目录多少"。这样换存储目标时百分比依然有意义。
+
+        超限时删最旧的段——循环录像本来就是覆盖式录像，旧的让位给新的
+        是它本来的语义，事件录像不受影响。
+        """
+        try:
+            pct = float(self.config.get("loop", "max_disk_percent", default=30) or 0)
+        except (TypeError, ValueError):
+            pct = 0.0
+        if pct <= 0:
+            return 0
+        total, _free = self._disk_space()
+        if total <= 0:
+            return 0
+        limit = int(total * pct / 100.0)
+        d = self.config.loop_dir()
+        used = dir_size(d)
+        removed = 0
+        if used > limit:
+            for path in self._oldest_loop_files():
+                if used <= limit:
+                    break
+                used -= self._drop_loop(path)
+                removed += 1
+        if removed:
+            self._log("loop guard: removed %d old loop segment(s); "
+                      "loop usage %.1f MB / limit %.1f MB (%.0f%% of disk)"
+                      % (removed, used / 1024 ** 2, limit / 1024 ** 2, pct))
+        return removed
+
+    def set_loop_enabled(self, enabled: bool) -> dict:
+        """开关循环录像。"""
+        enabled = bool(enabled)
+        self.config.set({"loop": {"enabled": enabled}})
+        with self._lock:
+            self._loop_enabled = enabled
+            if not enabled and (self._loop_active or self._loop_proc is not None):
+                self._finish_loop_segment(time.time())
+        return self.loop_stats()
+
+    def loop_stats(self) -> dict:
+        """循环录像的运行时状态。"""
+        now = time.time()
+        with self._lock:
+            # 目录扫描有点贵（段多了就是几百个文件），限频 5 秒一次
+            if now - self._loop_scan_at > 5.0:
+                self._loop_scan_at = now
+                files = self._oldest_loop_files()
+                # 正在录的那一段可能已经在目录里了（ffmpeg 一开始就建文件），
+                # 但它还没收尾，所以要从"已收尾段数"里扣掉。
+                active_on_disk = 0
+                if self._loop_active and self._loop_id:
+                    try:
+                        if (self.config.loop_dir() / self._loop_id).exists():
+                            active_on_disk = 1
+                    except OSError:
+                        pass
+                self._loop_closed = max(0, len(files) - active_on_disk)
+                total = 0
+                for f in files:
+                    try:
+                        total += f.stat().st_size
+                    except OSError:
+                        continue
+                self._loop_bytes = total
+            closed = self._loop_closed
+            used = self._loop_bytes
+            active = self._loop_active
+            current = self._loop_id
+            yielded = self._loop_yielded
+
+        try:
+            total_bytes, free_bytes = self._disk_space()
+        except Exception:
+            total_bytes, free_bytes = 0, 0
+        try:
+            pct = float(self.config.get("loop", "max_disk_percent", default=30) or 0)
+        except (TypeError, ValueError):
+            pct = 0.0
+        limit = int(total_bytes * pct / 100.0) if pct > 0 else 0
+        seg_count = int(closed) + (1 if active else 0)
+        try:
+            self.state.update(loop_segments=seg_count, loop_bytes=int(used))
+        except Exception:
+            pass
+        return {
+            "enabled": bool(self.config.get("loop", "enabled", default=False)),
+            "recording": bool(active),
+            "yielded": bool(yielded),
+            # 段数 = 已收尾的段 + 正在录的这一段
+            "segments": seg_count,
+            "bytes": int(used),
+            "current": current or "",
+            "dir": str(self.config.loop_dir()),
+            "segment_seconds": self._loop_segment_seconds(),
+            "max_disk_percent": pct,
+            "quality": int(self.config.get("loop", "quality", default=26) or 26),
+            "limit_bytes": limit,
+            "disk_total_bytes": int(total_bytes),
+            "disk_free_bytes": int(free_bytes),
+        }
 
     def _crop_box(self, src: bytes, box) -> bytes | None:
         """把检测分辨率下的包围盒换算到原始帧坐标并裁剪。"""
@@ -687,6 +1013,14 @@ class Recorder:
 
         # -- 护栏 A：媒体配额 -------------------------------------------
         if quota > 0 and used > quota:
+            # 回收顺序：循环录像段 → 事件录像 → 延时摄影。
+            # 循环录像本来就是覆盖式录像，旧的让位给新的正是它的语义；
+            # 事件录像有明确的事件上下文，优先级高于循环录像段。
+            for lpath in self._oldest_loop_files():
+                if used <= quota:
+                    break
+                used -= self._drop_loop(lpath)
+                removed += 1
             for vpath in self._oldest_files("videos"):
                 if used <= quota:
                     break
@@ -701,7 +1035,17 @@ class Recorder:
             # 意义，只会白白毁掉用户的录像历史。直接暂停录像并告警。
             media_total = dir_size(media_dir)
             if free + media_total >= min_free:
-                # 先删最旧的录像（连带其抓拍）
+                # 先删循环录像段
+                for lpath in self._oldest_loop_files():
+                    if free >= min_free:
+                        break
+                    before = free
+                    self._drop_loop(lpath)
+                    removed += 1
+                    _, free = self._disk_space()
+                    if free <= before:
+                        break
+                # 再删最旧的录像（连带其抓拍）
                 for vpath in self._oldest_files("videos"):
                     if free >= min_free:
                         break
@@ -770,6 +1114,12 @@ class Recorder:
         if what in ("all", "stills"):
             for f in stills.glob("*"):
                 f.unlink(missing_ok=True); n += 1
+        if what in ("all", "loop"):
+            for f in self.config.loop_dir().glob("*"):
+                f.unlink(missing_ok=True); n += 1
+            with self._lock:
+                self._loop_closed = 0
+                self._loop_bytes = 0
         with self._lock:
             if what in ("all", "videos"):
                 self._events = []
@@ -781,3 +1131,5 @@ class Recorder:
         with self._lock:
             if self._in_event or self._proc is not None:
                 self._finish_event(time.time())
+            if self._loop_active or self._loop_proc is not None:
+                self._finish_loop_segment(time.time())

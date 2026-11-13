@@ -208,6 +208,19 @@
     </div>
 
     <div class="panel">
+      <h2><span data-i18n="panel.imaging">成像参数</span> <span class="tag" id="imaging-backend">–</span>
+        <span class="spacer"></span>
+        <span class="hint" id="imaging-hint"></span>
+      </h2>
+      <div class="cols" id="imaging-box"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-imaging-save" class="primary" data-i18n="btn.saveImaging">应用成像参数</button>
+        <button id="btn-imaging-reset" data-i18n="btn.resetImaging">恢复默认成像</button>
+      </div>
+      <p class="hint" data-i18n="hint.imagingBackend"></p>
+    </div>
+
+    <div class="panel">
       <h2 data-i18n="panel.timelapseParams">延时摄影参数</h2>
       <div class="cols">
         <label class="check"><input type="checkbox" id="cfg-tl-enabled"> <span data-i18n="label.tlEnabled">启用延时摄影</span></label>
@@ -274,6 +287,29 @@
       <button id="btn-tl-hold" data-i18n="btn.hold">保持</button>
       <button id="btn-tl-end" class="warn" data-i18n="btn.finish">结束并合成</button>
     </div>
+  </div>
+
+  <div class="panel">
+    <h2><span data-i18n="panel.loop">循环录像</span> <span class="tag" id="loop-tag">–</span>
+      <span class="spacer"></span>
+      <span class="hint" id="loop-detail"></span>
+    </h2>
+    <div class="cols">
+      <label class="check"><input type="checkbox" id="loop-enabled">
+        <span data-i18n="label.loopEnabled">启用循环录像</span></label>
+      <label class="field"><span><span data-i18n="label.loopSegment">每段时长(秒)</span><b class="val" id="v-loop-seg"></b></span>
+        <input type="range" id="loop-seg" min="10" max="600" step="10"></label>
+      <label class="field"><span><span data-i18n="label.loopPercent">占用磁盘上限(%)</span><b class="val" id="v-loop-pct"></b></span>
+        <input type="range" id="loop-pct" min="5" max="90" step="5"></label>
+      <label class="field"><span><span data-i18n="label.loopQuality">编码质量 CRF</span><b class="val" id="v-loop-q"></b></span>
+        <input type="range" id="loop-q" min="18" max="32" step="1"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btn-loop-save" class="primary" data-i18n="btn.saveLoop">保存循环录像设置</button>
+      <button id="btn-loop-purge" class="sm danger" data-i18n="btn.purgeLoop">清空循环录像</button>
+      <span class="hint" id="loop-hint"></span>
+    </div>
+    <p class="hint" data-i18n="hint.loopYield"></p>
   </div>
 
   <div class="panel">

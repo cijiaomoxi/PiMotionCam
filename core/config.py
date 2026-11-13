@@ -53,6 +53,24 @@ DEFAULT_CONFIG = {
         # 注意 highlight 会让画面明显变暗（AE 改成按高光测光）。
         # 这里只是"安全旋钮"，真正的防卡死靠的是上面的看门狗 + 自动降级。
         "ae_constraint": "normal",
+        # 成像参数矩阵（亮度/对比度/饱和/锐度/降噪/曝光/白平衡/ISO/快门/变焦）
+        # 范围与语义见 core/imaging.py 的 SPECS；这里只放默认值。
+        "imaging": {
+            "brightness": 50,      # 0..100，50 = 正常
+            "contrast": 0,         # -100..100，0 = 正常
+            "saturation": 0,       # -100..100，0 = 正常，-100 = 纯黑白
+            "sharpness": 0,        # -100..100，0 = 正常
+            "denoise": "auto",     # auto|off|cdn_off|cdn_fast|cdn_hq
+            "exposure": "normal",  # normal|sport
+            "metering": "centre",  # centre|spot|average|custom
+            "ev": 0,               # -10..10 曝光补偿档位
+            "iso": 0,              # 0 = 自动，否则 ISO 数值
+            "shutter": 0,          # 微秒，0 = 自动
+            "awb": "auto",         # auto|incandescent|tungsten|...
+            "awb_r_gain": 0,       # 0 = 自动
+            "awb_b_gain": 0,       # 0 = 自动
+            "zoom": 100,           # 数字变焦百分比
+        },
     },
     "motion": {
         "enabled": True,
@@ -97,6 +115,16 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "period": 30,
         "hold": False,
+    },
+    # 循环录像（loop）：持续录像并按固定时长切段，超出配额就删最旧的段。
+    # 与事件录像**互斥**：检测到移动时 loop 让位，事件结束后自动恢复。
+    "loop": {
+        "enabled": False,
+        "segment_seconds": 60,     # 每段录像时长（秒）
+        "max_disk_percent": 30,     # 循环录像最多占文件系统总容量的百分比
+        "dir": "loop",               # 媒体目录下的子目录名
+        "yield_to_motion": True,     # 检测到移动时让位给事件录像
+        "quality": 26,               # 循环录像的 CRF（比事件录像略省空间）
     },
     "web": {
         "host": "0.0.0.0",
@@ -359,6 +387,16 @@ class Config:
         # 外部存储拔出也不会丢。
         self.internal_media_dir().mkdir(parents=True, exist_ok=True)
         PKC_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # 循环录像目录
+    # ------------------------------------------------------------------
+    def loop_dir(self) -> Path:
+        """循环录像的目录（媒体目录下的子目录，可配置）。"""
+        name = str(self.get("loop", "dir", default="loop") or "loop").strip()
+        # 只允许单层子目录名，别让配置把目录写到媒体目录外面去
+        name = os.path.basename(name.replace("\\", "/").rstrip("/")) or "loop"
+        return self.media_sub(name)
 
 
 # ----------------------------------------------------------------------

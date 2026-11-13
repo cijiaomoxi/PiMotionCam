@@ -42,6 +42,7 @@ import collections
 import numpy as np
 from PIL import Image
 
+from . import imaging
 from . import native
 
 try:
@@ -274,13 +275,17 @@ class RpiVidBackend:
     """
 
     def __init__(self, width: int, height: int, fps: int, quality: int = 50,
-                 rotation: int = 0, flip: str = "none"):
+                 rotation: int = 0, flip: str = "none",
+                 extra_args: list[str] | None = None):
         self.width = int(width)
         self.height = int(height)
         self.fps = max(1, int(fps))
         self.quality = int(quality)
         self.rotation = int(rotation or 0) % 360
         self.flip = str(flip or "none").lower()
+        # 成像参数（亮度/对比度/白平衡…）在 rpicam-vid 上是**启动参数**，
+        # 只能靠命令行带进去；改参数就意味着要重建这个进程。
+        self.extra_args = list(extra_args or [])
         self.proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._err_thread: threading.Thread | None = None
@@ -359,6 +364,8 @@ class RpiVidBackend:
             cmd.append("--hflip")
         if self.flip in ("vertical", "both"):
             cmd.append("--vflip")
+        # 成像参数：亮度/对比度/饱和/锐度/降噪/曝光/白平衡/ISO/快门/变焦
+        cmd += self.extra_args
         self._stop.clear()
         self.error = None
         self._stderr = collections.deque(maxlen=60)
@@ -612,6 +619,9 @@ class Camera:
         self._software_transform = False
         self._rot = 0
         self._flip = "none"
+        # 成像参数（亮度/对比度/白平衡/ISO…）：随配置走，三条通路的应用方式不同
+        self._imaging: dict = imaging.defaults()
+        self._imaging_unsupported: list[str] = []
 
     # ------------------------------------------------------------------
     @property
@@ -756,11 +766,153 @@ class Camera:
             self.log(f"软件旋转/镜像失败: {exc}")
             return frame
 
+    # ------------------------------------------------------------------
+    # 成像参数
+    #
+    # 三条通路的落地方式完全不同：
+    #   rpicam-vid  参数是**启动参数** → 改参数必须重建采集进程
+    #   libcamera    走 set_controls()   → 多数能热更新
+    #   v4l2-ctl     走 --set-ctrl       → 热更新，但控件得现查现用
+    # ------------------------------------------------------------------
+    def _load_imaging(self) -> dict:
+        """从配置里读成像参数（顺带做范围钳制）。"""
+        raw = self.config.get("camera", "imaging", default={}) or {}
+        return imaging.normalize(raw)
+
+    def imaging_backend(self) -> str:
+        """当前采集通路对应的成像参数后端。"""
+        b = (self.camera_info or {}).get("backend") or self.backend
+        if b == "rpicam":
+            return imaging.BACKEND_RPICAM
+        if b == "v4l2":
+            return imaging.BACKEND_V4L2
+        return imaging.BACKEND_LIBCAMERA
+
+    def imaging_status(self) -> dict:
+        """成像参数的完整状态（给 /api/imaging 用）。"""
+        backend = self.imaging_backend()
+        names = None
+        if backend == imaging.BACKEND_V4L2:
+            dev = (self.camera_info or {}).get("device") or ""
+            names = list(imaging.v4l2_controls(dev).keys())
+        return {
+            "values": dict(self._imaging),
+            "backend": backend,
+            "supported": imaging.supported_keys(backend, names),
+            "requires_restart": imaging.requires_restart(backend),
+            "unsupported": list(self._imaging_unsupported),
+        }
+
+    @staticmethod
+    def _filter_libcamera_controls(cam, controls: dict) -> dict:
+        """只保留相机真正支持、且取值落在合法范围内的控制项。
+
+        libcamera 对不支持的控制项会直接抛异常，对越界的值会打断言——
+        这里先按 camera_controls 的 min/max 过滤一遍，避免整条管线崩掉。
+        """
+        try:
+            avail = cam.camera_controls
+        except Exception:
+            return dict(controls or {})
+        out: dict = {}
+        for name, val in (controls or {}).items():
+            ctrl = avail.get(name)
+            if ctrl is None:
+                continue
+            if isinstance(val, (tuple, list)):
+                # 数组型控制（ScalerCrop）：只做基本合法性检查
+                if (len(val) == 4 and val[0] >= 0 and val[1] >= 0
+                        and val[2] > 0 and val[3] > 0):
+                    out[name] = tuple(val)
+                continue
+            try:
+                lo, hi = ctrl.min, ctrl.max
+            except Exception:
+                out[name] = val
+                continue
+            if lo is not None and hi is not None:
+                if not (float(lo) <= float(val) <= float(hi)):
+                    continue
+            out[name] = val
+        return out
+
+    def apply_imaging(self, values: dict) -> dict:
+        """应用成像参数。
+
+        返回 {ok, backend, applied, requires_restart, message, unsupported}。
+        requires_restart=True 表示调用方要重启相机才能让参数生效。
+        """
+        backend = self.imaging_backend()
+        norm = imaging.normalize(values)
+
+        if backend == imaging.BACKEND_LIBCAMERA:
+            if self.cam is None:
+                self._imaging = norm
+                return {"ok": True, "backend": backend, "applied": False,
+                        "requires_restart": True,
+                        "message": "相机尚未就绪，参数将在下次启动时生效"}
+            w, h = self.config.get("camera", "resolution", default=[1280, 720])
+            controls = self._filter_libcamera_controls(
+                self.cam, imaging.libcamera_controls(norm, int(w), int(h)))
+            try:
+                self.cam.set_controls(controls)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"成像参数热更新失败: {exc}")
+                return {"ok": False, "backend": backend, "applied": False,
+                        "requires_restart": False,
+                        "message": f"热更新失败：{exc}"}
+            self._imaging = norm
+            self._imaging_unsupported = []
+            return {"ok": True, "backend": backend, "applied": True,
+                    "requires_restart": False, "message": ""}
+
+        if backend == imaging.BACKEND_V4L2:
+            return self._apply_v4l2_imaging(norm)
+
+        # rpicam-vid：成像参数只能带在启动命令行上
+        self._imaging = norm
+        return {"ok": True, "backend": backend, "applied": False,
+                "requires_restart": True,
+                "message": "该通路的成像参数在采集进程启动时生效，需要重启相机"}
+
+    def _apply_v4l2_imaging(self, values: dict) -> dict:
+        """把成像参数下发到 USB 摄像头。"""
+        dev = (self.camera_info or {}).get("device") or ""
+        result = {"ok": True, "backend": imaging.BACKEND_V4L2, "applied": True,
+                  "requires_restart": False, "message": "",
+                  "unsupported": []}
+        if not dev:
+            result.update(ok=False, applied=False,
+                          message="未找到 USB 摄像头设备节点")
+            return result
+        controls = imaging.v4l2_controls(dev)
+        args, unsupported = imaging.v4l2_set_args(values, controls)
+        self._imaging = imaging.normalize(values)
+        self._imaging_unsupported = unsupported
+        result["unsupported"] = list(unsupported)
+        if not args:
+            result["message"] = "该摄像头没有可用的成像控件，参数未生效"
+            return result
+        cmd = ["v4l2-ctl", "-d", str(dev), "--set-ctrl"] + args
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=8)
+        except Exception as exc:  # noqa: BLE001
+            result.update(ok=False, applied=False,
+                          message=f"下发失败：{exc}")
+            return result
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", "replace").strip()[:200]
+            result.update(ok=False, applied=False,
+                          message=f"下发失败：{err or 'v4l2-ctl 返回码 %d' % proc.returncode}")
+            return result
+        return result
+
     def _build_config(self):
         backend, chosen = self._resolve_device()
         self.backend = backend
         w, h = self.config.get("camera", "resolution", default=[1280, 720])
         fps = max(1, int(self.config.get("camera", "fps", default=10)))
+        self._imaging = self._load_imaging()
 
         # 切换采集模式前，先把上一轮的相机句柄彻底释放。
         # 否则 Picamera2 / rpicam-vid 的残留句柄会一直占着 /dev/media*，
@@ -810,12 +962,17 @@ class Camera:
                 # auto 且没装 rpicam-vid：继续往下走 libcamera 通路
             else:
                 quality = int(self.config.get("camera", "jpeg_quality", default=72))
-                self.rpivid = RpiVidBackend(int(w), int(h), fps, quality, rot, flip)
+                # 成像参数是 rpicam-vid 的启动参数，只能带在命令行上。
+                # 改参数 = 重建这个进程（调用方负责重启相机）。
+                self.rpivid = RpiVidBackend(int(w), int(h), fps, quality, rot, flip,
+                                           extra_args=imaging.rpicam_args(self._imaging))
                 self.adapter = FrameAdapter("MJPEG", int(w), int(h), quality)
                 self._software_transform = False
+                self._imaging_unsupported = []
                 self.camera_info.update({"backend": "rpicam", "format": "MJPEG",
                                          "resolution": [int(w), int(h)], "is_rpi": True,
-                                         "rotation": rot, "flip": flip})
+                                         "rotation": rot, "flip": flip,
+                                         "imaging": dict(self._imaging)})
                 return None
 
         # ---- libcamera 通路 ----
@@ -863,6 +1020,11 @@ class Camera:
             except Exception:
                 pass
 
+        # 成像参数走 libcamera 控制项。测光模式由成像参数里的 metering 决定，
+        # 会覆盖上面那个旧的 ae_constraint 旋钮。
+        controls.update(self._filter_libcamera_controls(
+            cam, imaging.libcamera_controls(self._imaging, int(w), int(h))))
+
         order = [want] if want != "AUTO" else list(CSI_FORMATS if is_rpi else USB_FORMATS)
         buffer_count = max(3, int(self.config.get("camera", "buffer_count", default=6)))
         last_err = None
@@ -874,14 +1036,23 @@ class Camera:
                     controls=controls,
                 )
                 cam.configure(cfg)
+                # 再下发一次 set_controls：让这些控制项变成可热更新的动态控制，
+                # 之后改成像参数不必重建管线。
+                try:
+                    cam.set_controls({k: v for k, v in controls.items()
+                                      if k != "FrameDurationLimits"})
+                except Exception:
+                    pass
                 self.adapter = FrameAdapter(fmt, int(w), int(h),
                                             int(self.config.get("camera", "jpeg_quality", default=72)))
                 self._rot, self._flip = rot, flip
                 # libcamera 通路拿不到 Transform 控制项，旋转/镜像一律软件做
                 self._software_transform = (rot != 0) or (flip != "none")
+                self._imaging_unsupported = []
                 self.camera_info.update({"backend": "libcamera", "format": fmt,
                                          "resolution": [int(w), int(h)], "is_rpi": is_rpi,
-                                         "rotation": rot, "flip": flip})
+                                         "rotation": rot, "flip": flip,
+                                         "imaging": dict(self._imaging)})
                 return cam
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
@@ -900,6 +1071,9 @@ class Camera:
                 self.cam = self._build_config()
                 if self.v4l2:
                     self.v4l2.start()
+                    # USB 摄像头的成像控件要在流起来之后再下发：
+                    # 设备被占用时 v4l2-ctl 改不了控制项。
+                    self._apply_v4l2_imaging(self._imaging)
                 elif self.rpivid:
                     self.rpivid.start()
                 else:

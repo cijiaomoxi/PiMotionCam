@@ -110,9 +110,10 @@ chmod +x "$PKGDIR/install.sh" "$PKGDIR/build_native.sh" "$PKGDIR/krellcam.py" \
 echo "==> 校验"
 REQUIRED=(
   "core/__init__.py" "core/app.py" "core/camera.py" "core/config.py"
-  "core/detect.py" "core/hooks.py" "core/i18n.py" "core/native.py"
-  "core/presets.py" "core/recorder.py" "core/scheduler.py" "core/servo.py"
-  "core/state.py" "core/storage.py" "core/timelapse.py" "core/util.py" "core/web.py"
+  "core/detect.py" "core/hooks.py" "core/i18n.py" "core/imaging.py"
+  "core/native.py" "core/presets.py" "core/recorder.py" "core/scheduler.py"
+  "core/servo.py" "core/state.py" "core/storage.py" "core/timelapse.py"
+  "core/util.py" "core/web.py"
   "core/_pkc_native.c"
   "core/locales/zh-CN.json" "core/locales/en-US.json"
   "templates/index.html" "templates/login.html"
@@ -120,6 +121,7 @@ REQUIRED=(
   "docs/使用文档.md" "docs/USAGE.en.md" "docs/上游功能对照.md"
   "README.md" "README.en.md" "CHANGELOG.md" "LICENSE"
   "install.sh" "build_native.sh" "krellcam.py" "deploy.sh"
+  "tools/test_v270.py"
 )
 MISSING=0
 for rel in "${REQUIRED[@]}"; do

@@ -17,7 +17,7 @@ Written for users who already have a Raspberry Pi and want to install and run a 
 4. [First-Time Configuration](#4-first-time-configuration)
 5. [Interface Tour](#5-interface-tour)
 6. [Detection Tuning in Depth](#6-detection-tuning-in-depth)
-7. [Recording and Events](#7-recording-and-events)
+7. [Recording, Loop Recording and Imaging](#7-recording-loop-recording-and-imaging)
 8. [Timelapse, Servo, Scheduled Commands, and Event Hooks](#8-timelapse-servo-scheduled-commands-and-event-hooks)
 9. [Complete Configuration Reference](#9-complete-configuration-reference)
 10. [API Reference](#10-api-reference)
@@ -298,8 +298,9 @@ In the "Region Presets" panel, enter a name and click "Save Current as Preset" t
 
 - **Dual Algorithm Sensitivity**: the `far` and `near` parameter sets, detailed in [Section 6](#6-detection-tuning-in-depth).
 - **Detection Switches**: enable motion detection, and start detecting as soon as the service starts (the latter currently only stores its value; whether detection actually runs is governed by "Enable Motion Detection").
-- **Recording Parameters**: pre-roll, post-roll, event gap, maximum event length, disk limit, encoding quality CRF, encoder.
+- **Recording Parameters**: pre-roll, post-roll, event gap, maximum event length, disk limit, free-space floor, encoding quality CRF, encoder.
 - **Camera Parameters**: main stream resolution, frame rate, rotation, flip, detection resolution, detection frame rate, and exposure (the exposure slider currently only stores its value and does not change the camera's automatic exposure behavior).
+- **Imaging Parameters**: brightness, contrast, saturation, sharpness, denoise, exposure mode, metering, exposure compensation, ISO, shutter, white balance and digital zoom, detailed in [Section 7](#7-recording-loop-recording-and-imaging).
 - **Timelapse Parameters**: enable switch, default period, and start in hold mode.
 - Two buttons at the bottom: **Save Configuration** and **Restore Default Configuration**.
 - **Configuration Presets**: store the entire current configuration under a name and activate it with one click.
@@ -309,6 +310,7 @@ In the "Region Presets" panel, enter a name and click "Save Current as Preset" t
 ### 5.3 Media
 
 - **Timelapse**: enter a period in seconds and click "Start"; "Hold" pauses frame capture; "End and Compose" turns the captured frames into an MP4.
+- **Loop Recording**: enable switch, segment length, disk usage cap (%), encoder quality CRF and a button to delete the loop footage, detailed in [Section 7.8](#78-loop-recording-since-v270).
 - **Event Recordings**: lists every event; click an entry to view it; each entry has an "Archive to Remote" button on the right.
 - **Video Files** / **Snapshot Images**: two file lists you can open directly.
 - Three clear buttons at the top: **Clear Videos**, **Clear Snapshots**, and **Clear All**.
@@ -394,7 +396,7 @@ The two algorithms run **in parallel**, each judging every region independently.
 
 ---
 
-## 7. Recording and Events
+## 7. Recording, Loop Recording and Imaging
 
 ### 7.1 The Recording Flow
 
@@ -643,6 +645,112 @@ The relevant fields of the response:
 The `media` section of `GET /api/state` carries the same figures (`disk_free_bytes` / `disk_free_human` /
 `disk_total_bytes` / `disk_total_human` / `disk_low` / `disk_reason` / `min_free_gb`).
 
+### 7.8 Loop Recording (since v2.7.0)
+
+**Where**: Media tab → **Loop recording** panel. Tick "Enable loop recording", set the segment length and the
+usage cap, then click **Save loop settings**. **No service restart is required.**
+
+While enabled the camera records continuously and splits the footage into fixed-length segments under
+`media/loop/` (files named like `loop_20261113_183143_0001.mp4`).
+
+| Config key | Default | Meaning |
+| --- | --- | --- |
+| `loop.enabled` | `false` | Whether loop recording is on |
+| `loop.segment_seconds` | `60` | Length of one segment (seconds), 5–3600 |
+| `loop.max_disk_percent` | `30` | Percentage of the **whole filesystem** the loop footage may occupy (1–95) |
+| `loop.quality` | `26` | CRF of the loop recording (10–40) |
+
+From the command line:
+
+```bash
+# start / stop / query
+curl -X POST http://pi.local:8080/api/loop -H 'Content-Type: application/json' -d '{"action":"start"}'
+curl -X POST http://pi.local:8080/api/loop -H 'Content-Type: application/json' -d '{"action":"stop"}'
+curl -s http://pi.local:8080/api/loop
+
+# change the parameters
+curl -X POST http://pi.local:8080/api/loop -H 'Content-Type: application/json' \
+  -d '{"segment_seconds":120,"max_disk_percent":20}'
+```
+
+Internal commands (usable from scheduled commands, the FIFO and `at-commands`): `loop on`, `loop off`,
+`loop status`.
+
+#### Loop recording and event recording never run at the same time
+
+The Pi's H.264 hardware encoder lives on `/dev/video31` and **only one ffmpeg instance can use it at a time**;
+the capture thread feeds a single encoder as well. The two recorders are therefore mutually exclusive by
+construction, and the implementation uses the same state machine as the upstream
+(`VCB_STATE_LOOP_RECORD` / `VCB_STATE_MOTION_RECORD`):
+
+```
+idle         → the loop recorder writes
+motion seen  → the current loop segment is closed, the event clip takes the hardware encoder
+event over   → the loop recording resumes on the next frame
+```
+
+So with loop recording and motion detection both on, the few seconds around an event belong to the **event
+clip**, not to a loop segment. That is a hardware constraint, not a trade-off.
+
+#### Which footage is reclaimed first
+
+The two disk guards from v2.6.0 (media quota, free-space floor) reclaim loop segments too. The order is
+**loop segments → event recordings → timelapse**: a loop segment is continuous coverage by definition and the
+oldest ones are meant to be overwritten, while an event clip carries a specific moment that triggered the
+recording. Automatic cleanups are logged as well (`loop guard: removed N old loop segment(s)`).
+
+### 7.9 Imaging Parameter Matrix (since v2.7.0)
+
+**Where**: Detection tab → **Imaging** panel. Adjust the sliders and drop-downs, then click **Apply imaging**.
+
+The controls are **generated from the parameter schema returned by the backend**, so adding or removing a
+parameter never requires a template change — the schema lives in `SPECS` in `core/imaging.py`.
+
+| Parameter | Range | Normal | Meaning |
+| --- | --- | --- | --- |
+| `brightness` | 0–100 | 50 | Overall brightness |
+| `contrast` | -100–100 | 0 | Contrast strength |
+| `saturation` | -100–100 | 0 | -100 gives a pure greyscale picture (free from the ISP) |
+| `sharpness` | -100–100 | 0 | Edge sharpening |
+| `denoise` | auto / off / cdn_fast / cdn_hq | auto | Noise reduction, useful in low light |
+| `exposure` | normal / sport | normal | Sport shortens the exposure |
+| `metering` | centre / spot / average / custom | centre | Which part of the frame auto exposure meters |
+| `ev` | -10–10 | 0 | Exposure compensation in stops |
+| `iso` | 0–3200 | 0 (auto) | Fixed analogue gain |
+| `shutter` | 0–500000 µs | 0 (auto) | Fixed shutter time |
+| `awb` | auto / daylight / cloudy / … | auto | White balance preset |
+| `awb_r_gain` / `awb_b_gain` | 0–3 | 0 (auto) | Manual white balance gains |
+| `zoom` | 100–300 % | 100 | Digital zoom (centre crop, costs resolution) |
+
+The ranges match the semantics of the upstream MMAL build, so upstream configurations can be migrated over.
+
+#### Three capture paths, three ways to apply them
+
+| Current path | How the parameters are applied | Restart needed? |
+| --- | --- | --- |
+| CSI + rpicam-vid (ISP hardware JPEG) | Translated into rpicam-vid command-line flags | **Yes**, these are startup flags, so the capture process restarts (the picture is briefly interrupted) |
+| CSI + picamera2 / libcamera (raw RGB) | `set_controls()` | No, applied live |
+| USB cameras | `v4l2-ctl --set-ctrl` | No, applied live |
+
+What a USB camera supports has to be **probed**: the controls and their ranges are read with
+`v4l2-ctl --list-ctrls` first, each value is scaled into the control's own range, and controls the camera does
+not implement are skipped and greyed out in the UI ("not supported by the current capture path").
+
+```bash
+# read the current parameters, the path and what is unsupported
+curl -s http://pi.local:8080/api/imaging | python3 -m json.tool
+
+# store and apply
+curl -X POST http://pi.local:8080/api/imaging -H 'Content-Type: application/json' \
+  -d '{"values":{"brightness":60,"contrast":10,"awb":"daylight","saturation":-100}}'
+```
+
+> **Not implemented**: the 21 MMAL image effects of the upstream build (oil painting, cartoon, …) and its colour
+> effects. Those are MMAL-specific and have no counterpart in libcamera / rpicam-vid / V4L2; doing them in
+> software would mean decoding and re-encoding every frame, which contradicts this project's "no extra
+> per-frame cost" principle. The one effect that actually matters for surveillance — **greyscale** — is already
+> covered by `saturation = -100`.
+
 ---
 
 ## 8. Timelapse, Servo, Scheduled Commands, and Event Hooks
@@ -737,6 +845,8 @@ echo "record off" > ~/.pikrellcam/commands.fifo
 | `tl_start [seconds]` | Start a timelapse, optionally with a given period |
 | `tl_hold on` / `tl_hold off` | Hold / resume frame capture |
 | `tl_end` | End the timelapse and compose the video |
+| `loop on` / `loop off` / `loop status` | Switch loop recording on / off / show its state |
+| `imaging` | Show the active imaging path and a few current values (read-only) |
 | `motion_enable on` / `off` / `toggle` | Turn motion detection on / off / toggle |
 | `motion load_regions <name>` | Load a named region preset |
 | `motion limits <magnitude_limit> <count_limit>` | Change the two thresholds of the `far` algorithm |
@@ -815,6 +925,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `camera.stall_timeout` | `8.0` | Frame-fetch watchdog in seconds. If no new frame arrives within this time, the capture pipeline is considered dead and is rebuilt. |
 | `camera.min_fps` | `0.5` | Minimum frame rate. If the rate stays below this for `stall_timeout` seconds, the pipeline is likewise considered dead. Set to `0` to disable the check. |
 | `camera.ae_constraint` | `normal` | AE metering mode: `normal` (full frame) / `highlight` / `shadows` / `custom`. Note that `highlight` makes the picture noticeably darker. |
+| `camera.imaging.*` | see below | The imaging parameter matrix (14 parameters): `brightness` / `contrast` / `saturation` / `sharpness` / `denoise` / `exposure` / `metering` / `ev` / `iso` / `shutter` / `awb` / `awb_r_gain` / `awb_b_gain` / `zoom`. Ranges and semantics are listed in [Section 7.9](#79-imaging-parameter-matrix-since-v270). |
 
 ### 9.2 motion — Detection
 
@@ -850,6 +961,16 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `record.frame_write_timeout` | `8` | Longest wait, in seconds, for one frame to reach the encoder. On timeout the encoder is treated as stuck: the recording is abandoned and the service keeps running. |
 | `record.encoder_close_timeout` | `15` | Longest wait, in seconds, for ffmpeg to finish writing the `moov` atom when a recording ends. |
 | `record.encoder_cooldown` | `60` | Seconds to stop trying to record after the encoder got stuck, so every motion event does not wait for a timeout. |
+
+### 9.3.1 loop — Loop recording
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `loop.enabled` | `false` | Whether loop recording is on. |
+| `loop.segment_seconds` | `60` | Length of one segment (seconds, 5–3600). |
+| `loop.max_disk_percent` | `30` | Percentage of the **whole filesystem** the loop footage may occupy (1–95); the oldest segments are deleted when it is exceeded. |
+| `loop.dir` | `loop` | Directory for the loop footage (a sub-directory of the media folder). |
+| `loop.quality` | `26` | CRF of the loop recording (10–40). |
 
 ### 9.4 timelapse — Timelapse
 
@@ -934,7 +1055,7 @@ The service hot-reloads the configuration file (scheduled commands and region pr
 
 ## 10. API Reference
 
-There are **56 HTTP endpoints** in total: 51 `/api/*` endpoints plus 5 page and static-file routes. Once password protection is enabled, every `/api/` endpoint except `/api/auth`, `/api/auth/login`, and `/login` returns `401` when unauthenticated.
+There are **58 HTTP endpoints** in total: 53 `/api/*` endpoints plus 5 page and static-file routes. Once password protection is enabled, every `/api/` endpoint except `/api/auth`, `/api/auth/login`, and `/login` returns `401` when unauthenticated.
 
 ### 10.1 Read-Only Endpoints
 
@@ -959,6 +1080,8 @@ There are **56 HTTP endpoints** in total: 51 `/api/*` endpoints plus 5 page and 
 | GET | `/api/release` | `{version, release, current, releases, root}` | The running version and all retained historical versions. |
 | GET | `/api/system` | status object | Model, system version, Python version, directories, hostname, uptime. |
 | GET | `/api/i18n` | `{language, available, strings}` | Current language, all available languages, and the string dictionary. |
+| GET | `/api/loop` | state object | Loop recording state (`enabled`/`recording`/`yielded`/`segments`/`bytes`/`limit_bytes`/`dir`). |
+| GET | `/api/imaging` | `{values, schema, backend, supported, requires_restart}` | Current imaging values, the parameter schema, the active capture path and what it supports. |
 | GET | `/api/storage` | `{ok, storage}` | The detected storage devices and the current storage state. |
 | GET | `/snapshot.jpg` | JPEG | The most recent frame as a still image. |
 | GET | `/video_feed` | multipart stream | The MJPEG live preview stream. |

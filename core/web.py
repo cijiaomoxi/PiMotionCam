@@ -19,6 +19,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, send_file, session, url_for)
 
 from .config import APP_DIR, check_password, hash_password
+from . import imaging
 from .i18n import available as i18n_available
 from .i18n import resolve as resolve_language
 from .i18n import strings as i18n_strings
@@ -226,6 +227,7 @@ def create_app(service) -> Flask:
         st["camera"] = service.camera.camera_info
         st["release"] = _release_info()
         st["storage"] = service.config.media_status()
+        st["loop"] = service.recorder.loop_stats()
         return jsonify(st)
 
     @app.route("/api/config", methods=["GET"])
@@ -236,7 +238,8 @@ def create_app(service) -> Flask:
     def api_config_post():
         data = request.get_json(silent=True) or {}
         patch = {k: v for k, v in data.items() if k in (
-            "camera", "motion", "record", "timelapse", "web", "media", "servo", "hooks")}
+            "camera", "motion", "record", "timelapse", "web", "media", "servo",
+            "hooks", "loop")}
         if not patch:
             return jsonify({"ok": False, "error": "没有可更新的配置段"}), 400
         if "web" in patch and "password_hash" in patch["web"]:
@@ -506,6 +509,87 @@ def create_app(service) -> Flask:
         if action == "end":
             return jsonify(service.timelapse.end())
         return jsonify({"ok": False, "error": "unknown action"}), 400
+
+    # ------------------------------------------------------------------
+    # 循环录像（loop）
+    # ------------------------------------------------------------------
+    @app.route("/api/loop", methods=["GET"])
+    def api_loop_get():
+        return jsonify(service.recorder.loop_stats())
+
+    @app.route("/api/loop", methods=["POST"])
+    def api_loop_post():
+        """开关循环录像，或修改它的参数。"""
+        data = request.get_json(silent=True) or {}
+        action = data.get("action")
+        if action in ("start", "on"):
+            service.recorder.set_loop_enabled(True)
+            return jsonify({"ok": True, **service.recorder.loop_stats()})
+        if action in ("stop", "off"):
+            service.recorder.set_loop_enabled(False)
+            return jsonify({"ok": True, **service.recorder.loop_stats()})
+
+        patch: dict = {}
+        if "enabled" in data:
+            patch["enabled"] = bool(data["enabled"])
+        if "segment_seconds" in data:
+            try:
+                seg = float(data["segment_seconds"])
+            except (TypeError, ValueError):
+                seg = 60.0
+            patch["segment_seconds"] = max(5, min(3600, int(seg)))
+        if "max_disk_percent" in data:
+            try:
+                pct = float(data["max_disk_percent"])
+            except (TypeError, ValueError):
+                pct = 30.0
+            patch["max_disk_percent"] = max(1, min(95, int(pct)))
+        if "quality" in data:
+            try:
+                q = int(data["quality"])
+            except (TypeError, ValueError):
+                q = 26
+            patch["quality"] = max(10, min(40, q))
+        if patch:
+            service.config.set({"loop": patch})
+        if "enabled" in patch:
+            service.recorder.set_loop_enabled(patch["enabled"])
+        return jsonify({"ok": True, **service.recorder.loop_stats()})
+
+    # ------------------------------------------------------------------
+    # 成像参数矩阵
+    # ------------------------------------------------------------------
+    @app.route("/api/imaging", methods=["GET"])
+    def api_imaging_get():
+        st = service.camera.imaging_status()
+        st["schema"] = imaging.schema()
+        st["ok"] = True
+        return jsonify(st)
+
+    @app.route("/api/imaging", methods=["POST"])
+    def api_imaging_post():
+        """保存并应用成像参数。
+
+        三条通路的应用方式不同：
+          * rpicam-vid —— 参数是启动参数，改完必须重启相机
+          * libcamera —— set_controls() 热更新
+          * v4l2      —— v4l2-ctl --set-ctrl 热更新
+        """
+        data = request.get_json(silent=True) or {}
+        raw = data.get("values") if isinstance(data.get("values"), dict) else data
+        norm = imaging.normalize(raw)
+        service.config.set({"camera": {"imaging": norm}})
+        result = service.camera.apply_imaging(norm)
+        if result.get("requires_restart"):
+            service._restart_camera()
+            result["applied"] = True
+        st = service.camera.imaging_status()
+        st["schema"] = imaging.schema()
+        st["ok"] = bool(result.get("ok", True))
+        st["applied"] = bool(result.get("applied"))
+        st["message"] = result.get("message", "")
+        st["unsupported"] = result.get("unsupported", [])
+        return jsonify(st)
 
     # ------------------------------------------------------------------
     # 媒体

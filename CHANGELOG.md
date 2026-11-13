@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 | --- | --- | --- |
+| [2.7.0](#270---2026-11-13) | 2026-11-13 | Loop recording + imaging parameter matrix |
 | [2.6.0](#260---2026-11-13) | 2026-11-13 | Record to USB / external storage with safe unplug handling |
 | [2.5.0](#250---2026-11-11) | 2026-11-11 | Bilingual interface (Chinese / English) |
 | [2.4.0](#240---2026-11-10) | 2026-11-10 | ISP hardware JPEG path, AE rework, working rotation / flip |
@@ -23,6 +24,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | [2.1.1](#211---2026-11-09) | 2026-11-09 | `GET /api/release`, camera selector on the preview tab |
 | [2.1.0](#210---2026-11-09) | 2026-11-09 | USB cameras, versioned publishing, servo pan/tilt |
 | [2.0.0](#200---2026-11-08) | 2026-11-08 | First release |
+
+---
+
+## [2.7.0] - 2026-11-13
+
+Two features that were still missing compared with the upstream PiKrellCam: continuous **loop recording** and a
+full **imaging parameter matrix** (brightness, contrast, saturation, sharpness, denoise, exposure, metering,
+exposure compensation, ISO, shutter, white balance, digital zoom).
+
+### Added
+
+- **Loop recording** (`loop.enabled`, `loop.segment_seconds`, `loop.max_disk_percent`, `loop.quality`).
+  While enabled the camera records continuously and splits the footage into fixed-length segments under
+  `media/loop/`. The disk cap follows the upstream semantics: it is a percentage of the **whole filesystem**
+  (`loop_diskusage_percent`), not of the media folder, so the number stays meaningful after switching to a USB
+  drive. When the cap is exceeded the oldest segments are deleted — that is what a loop recorder is for.
+- **Loop recording yields to event recording.** The Pi's H.264 hardware encoder lives on `/dev/video31` and only
+  one ffmpeg instance can use it at a time, and the capture thread feeds a single encoder. So the two recorders
+  are mutually exclusive by construction: when motion is detected the current loop segment is closed, the event
+  clip is recorded with the hardware encoder, and the loop resumes on the next frame. This is the same state
+  machine the upstream uses (`VCB_STATE_LOOP_RECORD` / `VCB_STATE_MOTION_RECORD`).
+- The disk guard from 2.6.0 now also reclaims loop segments. The reclamation order is
+  **loop segments → event recordings → timelapse**: a loop segment is the least valuable of the three (it is
+  continuous coverage by definition and the oldest ones are the intended ones to overwrite), while an event clip
+  carries a specific moment that triggered the recording.
+- `GET /api/loop` and `POST /api/loop` (switch it on/off, change the segment length, the disk cap and the CRF),
+  the `loop` configuration section, the `loop on|off|status` internal command, and a "循环录像 / Loop recording"
+  panel on the Media tab with a button to delete the loop footage.
+- **`core/imaging.py` — the imaging parameter matrix.** One set of backend-independent parameters (14 of them),
+  each with a fixed range that matches the upstream MMAL semantics: `brightness` 0..100 (50 = normal),
+  `contrast` / `saturation` / `sharpness` -100..100 (0 = normal, saturation -100 = pure greyscale), `ev` -10..10,
+  `iso` 0..3200 (0 = automatic), `shutter` in microseconds (0 = automatic), `zoom` 100..300 %, plus the
+  `denoise`, `exposure`, `metering` and `awb` enumerations.
+- The parameters are translated into whatever the active capture path speaks:
+  - **rpicam-vid** (CSI, ISP hardware JPEG) → command-line flags. These are *startup* flags, so changing a value
+    restarts the capture process; the web UI says so explicitly.
+  - **picamera2 / libcamera** (CSI, raw RGB) → `set_controls()`, i.e. live, without restarting the camera.
+  - **USB cameras** → `v4l2-ctl --set-ctrl`. The available controls are probed with `--list-ctrls` first, each
+    value is scaled into the control's own range, and the parameters a camera does not implement are reported as
+    unsupported instead of failing the whole command.
+- `GET /api/imaging` returns the current values, the parameter schema, the active backend and the list of
+  parameters the backend does not support; `POST /api/imaging` stores and applies them.
+- An "成像参数 / Imaging" panel on the Detection tab. The controls are **generated from the schema** returned by
+  the backend, so adding a parameter only means editing `core/imaging.py` — no template or JavaScript changes.
+  Parameters the current capture path cannot do are greyed out and disabled.
+- `tools/test_v270.py` — 88 offline unit tests covering the parameter normalisation, the three backend mappings,
+  the loop state machine (segment rotation, yielding to an event, resuming afterwards), the loop disk cap and the
+  reclamation order. It runs on a Mac without numpy / Pillow (they are stubbed) and on the Pi with the real
+  libraries.
+- 78 new strings in each language pack (493 in total).
+
+### Notes
+
+- The upstream `image_effect` (negative, oil painting, cartoon …) is **not** implemented. Those effects are an
+  MMAL feature and have no counterpart in libcamera / rpicam-vid / V4L2; implementing them in software would cost
+  a JPEG decode plus an encode on every frame, which is exactly the kind of per-frame cost this project avoids.
+  Greyscale — the only effect that actually matters for surveillance — is already covered by pulling
+  `saturation` down to -100, which the ISP does for free.
+- Digital zoom is a centre crop (`--roi` on rpicam-vid, `ScalerCrop` on libcamera), so it costs resolution
+  rather than field of view.
 
 ---
 

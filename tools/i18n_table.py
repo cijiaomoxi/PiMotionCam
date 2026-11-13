@@ -526,6 +526,105 @@ EXTRA = {
         "whole disk is fine). What really protects you is the free-space floor: "
         "below it the oldest recordings are removed automatically, and recording is "
         "paused if that is not enough."),
+
+    # --- 成像参数矩阵（v2.7.0 起）---
+    # 这些 key 在 HTML / JS 里已写成 data-i18n / t('key') 的形式，
+    # 不会被字面量扫描器收录，必须在这里登记。
+    "panel.imaging": ("成像参数", "Imaging"),
+    "btn.saveImaging": ("应用成像参数", "Apply imaging"),
+    "btn.resetImaging": ("恢复默认成像", "Reset imaging"),
+    "toast.imagingSaved": ("成像参数已应用", "Imaging settings applied"),
+    "toast.imagingReset": ("成像参数已恢复默认", "Imaging settings reset to defaults"),
+    "err.saveImaging": ("保存成像参数失败：", "Failed to save imaging settings: "),
+    "imaging.group.tone": ("影调", "Tone"),
+    "imaging.group.exposure": ("曝光", "Exposure"),
+    "imaging.group.color": ("色彩与变焦", "Colour & zoom"),
+    "imaging.brightness": ("亮度", "Brightness"),
+    "imaging.contrast": ("对比度", "Contrast"),
+    "imaging.saturation": ("饱和度", "Saturation"),
+    "imaging.sharpness": ("锐度", "Sharpness"),
+    "imaging.denoise": ("降噪", "Noise reduction"),
+    "imaging.exposure": ("曝光模式", "Exposure mode"),
+    "imaging.metering": ("测光模式", "Metering"),
+    "imaging.ev": ("曝光补偿", "Exposure compensation"),
+    "imaging.iso": ("ISO 增益", "ISO gain"),
+    "imaging.shutter": ("快门速度", "Shutter speed"),
+    "imaging.awb": ("白平衡", "White balance"),
+    "imaging.awbRGain": ("红色增益", "Red gain"),
+    "imaging.awbBGain": ("蓝色增益", "Blue gain"),
+    "imaging.zoom": ("数字变焦", "Digital zoom"),
+    "imaging.denoiseAuto": ("自动", "Auto"),
+    "imaging.denoiseOff": ("关闭", "Off"),
+    "imaging.denoiseCdnOff": ("关闭（保留色彩降噪）", "Off (keep colour denoise)"),
+    "imaging.denoiseCdnFast": ("快速", "Fast"),
+    "imaging.denoiseCdnHq": ("高质量", "High quality"),
+    "imaging.expNormal": ("标准", "Standard"),
+    "imaging.expSport": ("运动（缩短曝光）", "Sport (short exposure)"),
+    "imaging.meterCentre": ("中心", "Centre"),
+    "imaging.meterSpot": ("点测光", "Spot"),
+    "imaging.meterAverage": ("平均", "Average"),
+    "imaging.meterCustom": ("自定义", "Custom"),
+    "imaging.awbAuto": ("自动", "Auto"),
+    "imaging.awbIncandescent": ("白炽灯", "Incandescent"),
+    "imaging.awbTungsten": ("钨丝灯", "Tungsten"),
+    "imaging.awbFluorescent": ("荧光灯", "Fluorescent"),
+    "imaging.awbIndoor": ("室内", "Indoor"),
+    "imaging.awbDaylight": ("日光", "Daylight"),
+    "imaging.awbShade": ("阴影", "Shade"),
+    "imaging.awbCloudy": ("阴天", "Cloudy"),
+    "imaging.awbGreysworld": ("灰世界", "Greyscale world"),
+    "imaging.backendRpicam": ("ISP 硬件通路", "ISP hardware path"),
+    "imaging.backendLibcamera": ("libcamera 通路", "libcamera path"),
+    "imaging.backendV4l2": ("USB 通路", "USB path"),
+    "imaging.notSupported": ("当前采集通路不支持这一项", "Not supported by the current capture path"),
+    "imaging.unsupported": ("有 {n} 项在当前采集通路下不支持", "{n} setting(s) are not supported by the current capture path"),
+    "hint.imagingBackend": (
+        "不同采集通路支持的参数不一样：ISP 硬件通路的成像参数在采集进程启动时生效，"
+        "改动会重启相机；libcamera 与 USB 通路可以热更新。",
+        "Each capture path supports a different set of parameters: on the ISP hardware "
+        "path the imaging settings are applied when the capture process starts, so a "
+        "change restarts the camera; libcamera and USB apply them live."),
+    "hint.imagingBrightness": ("整体画面明暗，50 为正常", "Overall brightness; 50 is normal"),
+    "hint.imagingContrast": ("明暗对比强度，0 为正常", "Contrast strength; 0 is normal"),
+    "hint.imagingSaturation": ("色彩浓度，0 为正常，-100 为纯黑白", "Colour intensity; 0 is normal, -100 is pure greyscale"),
+    "hint.imagingSharpness": ("边缘锐化强度，0 为正常", "Edge sharpening; 0 is normal"),
+    "hint.imagingDenoise": ("画面降噪，夜间噪点多时可以调高", "Noise reduction; useful in low light"),
+    "hint.imagingExposure": ("曝光策略，运动会缩短曝光时间", "Exposure strategy; sport shortens the exposure"),
+    "hint.imagingMetering": ("测光方式，决定自动曝光参考哪部分画面", "How auto exposure meters the scene"),
+    "hint.imagingEv": ("自动曝光补偿档位，正数变亮、负数变暗", "Auto exposure compensation in stops"),
+    "hint.imagingIso": ("固定 ISO 增益，0 为自动", "Fixed ISO gain; 0 means automatic"),
+    "hint.imagingShutter": ("固定快门时间（微秒），0 为自动", "Fixed shutter time in microseconds; 0 means automatic"),
+    "hint.imagingAwb": ("白平衡预设，夜间误色偏时选固定色温", "White balance preset; a fixed preset helps at night"),
+    "hint.imagingAwbGains": ("手动设置红蓝通道增益，0 为自动", "Manual red/blue gain; 0 means automatic"),
+    "hint.imagingZoom": ("数字变焦（裁剪画面放大），会损失分辨率", "Digital zoom (crops and enlarges); resolution is lost"),
+
+    # --- 循环录像（v2.7.0 起）---
+    "panel.loop": ("循环录像", "Loop recording"),
+    "label.loopEnabled": ("启用循环录像", "Enable loop recording"),
+    "label.loopSegment": ("每段时长(秒)", "Segment length (s)"),
+    "label.loopPercent": ("占用磁盘上限(%)", "Disk usage cap (%)"),
+    "label.loopQuality": ("编码质量 CRF", "Encoder quality CRF"),
+    "btn.saveLoop": ("保存循环录像设置", "Save loop settings"),
+    "btn.purgeLoop": ("清空循环录像", "Delete loop recordings"),
+    "toast.loopSaved": ("循环录像设置已保存", "Loop settings saved"),
+    "toast.loopPurged": ("循环录像已清空", "Loop recordings deleted"),
+    "err.saveLoop": ("保存循环录像设置失败：", "Failed to save loop settings: "),
+    "confirm.purgeLoop": (
+        "确定要删除全部循环录像段吗？此操作不可撤销。",
+        "Delete every loop recording segment? This cannot be undone."),
+    "loop.disabled": ("未启用", "Disabled"),
+    "loop.enabled": ("已启用", "Enabled"),
+    "loop.recording": ("录制中", "Recording"),
+    "loop.detail": ("{n} 段 · 占用 {size} / 上限 {limit}",
+                    "{n} segment(s) · {size} used / {limit} cap"),
+    "hint.loopYield": (
+        "循环录像与事件录像共用同一个硬件编码器，不能同时录："
+        "检测到移动时循环录像会让位给事件录像，事件结束后自动恢复。"
+        "占用超过上限时优先删除最旧的循环录像段，事件录像不受影响。",
+        "Loop recording and event recording share the same hardware encoder and cannot "
+        "run at the same time: when motion is detected the loop yields to the event "
+        "clip and resumes afterwards. When the usage cap is exceeded the oldest loop "
+        "segments are deleted first; event recordings are never touched."),
 }
 
 

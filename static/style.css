@@ -482,3 +482,16 @@ td .acts { display: flex; gap: 4px; flex-wrap: wrap; }
   .ev .thumbs img { width: 100%; }
   .metric { min-width: 64px; }
 }
+
+/* ---------------------------------------------------------------- 成像参数 */
+.imgroup { margin-bottom: 14px; }
+.imgroup:last-child { margin-bottom: 0; }
+.imgroup h3 {
+  font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  color: var(--dim); text-transform: uppercase;
+  margin: 0 0 8px; padding-bottom: 5px;
+  border-bottom: 1px solid var(--line);
+}
+.imgroup .cols { gap: 10px 16px; }
+/* 当前采集通路不支持的参数：置灰并禁用 */
+.field.dim { opacity: .42; }

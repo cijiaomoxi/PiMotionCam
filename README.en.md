@@ -95,6 +95,8 @@ differencing**, so it works on a Chinese-locale Raspberry Pi with Raspberry Pi C
 | Switchable capture path | ✅ Switch between ISP hardware JPEG and raw RGB from the web UI at any time, no service restart (v2.3.0+) |
 | Picture rotation / mirroring | ✅ 0/180 is done by the ISP at zero cost, 90/270 automatically switches to software rotation over RGB888 (v2.4.0+) |
 | Stall self-healing | ✅ Frame-fetch watchdog + automatic degradation (resolution → frame rate → fall back to RGB888); a dead pipeline is rebuilt automatically (v2.3.0+) |
+| Loop recording | ✅ Continuous recording split into fixed-length segments, oldest segments deleted when the disk cap is exceeded; yields to the event recorder on motion (v2.7.0+) |
+| Imaging parameter matrix | ✅ Brightness / contrast / saturation / sharpness / denoise / exposure / metering / EV / ISO / shutter / white balance / digital zoom, applied per capture path (v2.7.0+) |
 | Video / snapshot / timelapse / archive pages | ✅ Media tab + remote archiving (scp) |
 | System log page | ✅ Continuously scrolling log |
 | Help page | ✅ Built-in documentation |
@@ -427,6 +429,99 @@ listed with its own usable / total figures.
 
 ---
 
+## Loop recording (since v2.7.0)
+
+The Media tab has a "Loop recording" panel. Once enabled the camera records continuously and splits the footage
+into fixed-length segments under `media/loop/`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `loop.enabled` | `false` | Whether loop recording is on |
+| `loop.segment_seconds` | `60` | Length of one segment |
+| `loop.max_disk_percent` | `30` | Percentage of the **whole filesystem** the loop footage may occupy; the oldest segments are deleted when it is exceeded |
+| `loop.quality` | `26` | CRF of the loop recording (slightly cheaper than the event clips) |
+
+The cap is a percentage of the **filesystem capacity**, matching the upstream `loop_diskusage_percent`, so the
+number stays meaningful after switching to a USB drive.
+
+### Loop recording and event recording cannot run at the same time
+
+The Pi's H.264 hardware encoder lives on `/dev/video31` and **only one ffmpeg instance can use it at a time**;
+the capture thread feeds a single encoder as well. The two recorders are therefore mutually exclusive by
+construction, and the implementation uses the same state machine as upstream
+(`VCB_STATE_LOOP_RECORD` / `VCB_STATE_MOTION_RECORD`):
+
+```
+idle         → the loop recorder writes
+motion seen  → the current loop segment is closed, the event clip takes the hardware encoder
+event over   → the loop recording resumes on the next frame
+```
+
+So with loop recording and motion detection both on, the few seconds around an event belong to the **event
+clip**, not to a loop segment. That is a hardware constraint, not a trade-off.
+
+### Which footage is reclaimed first
+
+The two disk guards from v2.6.0 (media quota, free-space floor) now reclaim loop segments too. The order is
+**loop segments → event recordings → timelapse**: a loop segment is the least valuable of the three (it is
+continuous coverage by definition and the oldest ones are meant to be overwritten), while an event clip carries a
+specific moment that triggered the recording.
+
+---
+
+## Imaging parameter matrix (since v2.7.0)
+
+The Detection tab has an "Imaging" panel with 14 parameters:
+
+| Key | Range | Normal | Meaning |
+| --- | --- | --- | --- |
+| `brightness` | 0–100 | 50 | Overall brightness |
+| `contrast` | -100–100 | 0 | Contrast strength |
+| `saturation` | -100–100 | 0 | -100 gives a pure greyscale picture |
+| `sharpness` | -100–100 | 0 | Edge sharpening |
+| `denoise` | auto / off / cdn_fast / cdn_hq | auto | Noise reduction, useful in low light |
+| `exposure` | normal / sport | normal | Sport shortens the exposure |
+| `metering` | centre / spot / average / custom | centre | Which part of the frame auto exposure meters |
+| `ev` | -10–10 | 0 | Exposure compensation in stops |
+| `iso` | 0–3200 | 0 (auto) | Fixed analogue gain |
+| `shutter` | 0–500000 µs | 0 (auto) | Fixed shutter time |
+| `awb` | auto / daylight / cloudy / … | auto | White balance preset |
+| `awb_r_gain` / `awb_b_gain` | 0–3 | 0 (auto) | Manual white balance gains |
+| `zoom` | 100–300 % | 100 | Digital zoom (centre crop, costs resolution) |
+
+The ranges deliberately match the semantics of the upstream MMAL build so that upstream configurations can be
+migrated over.
+
+### Three capture paths, three ways to apply them
+
+| Path | How the parameters are applied | Restart needed? |
+| --- | --- | --- |
+| CSI + rpicam-vid (ISP hardware JPEG) | Translated into command-line flags | **Yes**, these are startup flags |
+| CSI + picamera2 / libcamera (raw RGB) | `set_controls()` | No, applied live |
+| USB cameras | `v4l2-ctl --set-ctrl` | No, applied live |
+
+What a USB camera actually supports has to be **probed**: the controls and their ranges are read with
+`--list-ctrls` first, each value is scaled into the control's own range, and controls the camera does not
+implement are skipped and reported as unsupported (greyed out in the UI).
+
+### The controls are generated
+
+The controls are **not hard-coded in the HTML** — they are generated from the parameter schema returned by
+`/api/imaging`. Adding a parameter only means editing `SPECS` in `core/imaging.py`; neither the template nor the
+JavaScript has to change.
+
+```bash
+# read the current parameters and the active path
+curl -s http://<pi>:8080/api/imaging | python3 -m json.tool
+
+# change parameters (they are stored and applied automatically)
+curl -s -X POST http://<pi>:8080/api/imaging \
+  -H 'Content-Type: application/json' \
+  -d '{"values":{"brightness":60,"contrast":10,"awb":"daylight"}}'
+```
+
+---
+
 ## Deployment
 
 ### Method 1: Versioned Publishing (recommended)
@@ -559,6 +654,7 @@ systemctl --user restart pikrellcam-lite.service
 | `ae_constraint` | `normal` | AE metering mode: `normal` / `highlight` / `shadows` / `custom` |
 | `stall_timeout` | `8.0` | Frame-fetch watchdog: if no new frame arrives within this many seconds, the capture pipeline is rebuilt |
 | `min_fps` | `0.5` | Frame rate floor: if the rate stays below this for `stall_timeout` seconds, the pipeline is likewise considered dead |
+| `imaging.*` | see above | The imaging parameter matrix (14 parameters); ranges and semantics are listed in the "Imaging parameter matrix" section |
 
 ### motion
 
@@ -598,6 +694,10 @@ systemctl --user restart pikrellcam-lite.service
 | `servo.pan_pin` / `tilt_pin` | `18` / `17` | BCM pin numbers |
 | `servo.positions` | 3 presets | `[{name,pan,tilt}]`; each position can be bound to a settings preset |
 | `hooks.*` | `""` | Event hook commands, supporting the `{id} {video} {thumb} {time} {date} {duration} {algorithm} {region} {media_dir}` placeholders |
+| `loop.enabled` | `false` | Whether loop recording is on |
+| `loop.segment_seconds` | `60` | Length of one loop recording segment (seconds) |
+| `loop.max_disk_percent` | `30` | Percentage of the whole filesystem the loop footage may occupy; the oldest segments are deleted when it is exceeded |
+| `loop.quality` | `26` | CRF of the loop recording |
 
 ---
 

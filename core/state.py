@@ -37,6 +37,11 @@ class RuntimeState:
         "disk_used_bytes": 0,
         "disk_low": False,
         "disk_reason": "",
+        # 循环录像（loop）
+        "loop_recording": False,
+        "loop_segments": 0,
+        "loop_bytes": 0,
+        "loop_yielded": False,
     }
 
     def __init__(self):
