@@ -2,7 +2,7 @@
 
 Written for users who already have a Raspberry Pi and want to install and run a motion-detection recording service on it.
 
-- Applies to: **v2.5.0** (current development version is v2.4.0; this release is v2.5.0)
+- Applies to: **v2.6.0** (current development version is v2.6.0; this release is v2.6.0)
 - Web interface: **http://pi.local:8080/**
 - Companion document: technical internals and design rationale live in `README.md` at the repository root. This guide covers "how do I install it and use it".
 - Acknowledgements and reference: <https://github.com/billw2/pikrellcam> — this is an independent, unofficial implementation; see "Acknowledgements and References" in the repository root `README.md`.
@@ -476,6 +476,110 @@ curl -X POST http://pi.local:8080/api/record \
 
 Resume with `{"action": "resume"}` (equivalent to `"on"`).
 
+### 7.7 Recording to USB / External Storage (since v2.6.0)
+
+Recordings, snapshots and timelapse videos can be written to a USB drive, a portable hard disk or an external SD
+card instead of the Raspberry Pi's own SD card.
+
+**Where**: **Media** tab → **Storage location** panel. Pick a device and click **Apply storage settings** —
+**no restart needed**.
+
+#### Why unplugging needs careful handling
+
+After a USB drive is pulled out, **the mount point directory stays behind on the SD card** (it is simply an empty
+directory now). If the program only asks "does this path exist?", it concludes that everything is fine and keeps
+writing the recordings into the SD card. Over time that fills up the system partition and **bricks the Raspberry
+Pi — it will no longer boot**.
+
+pikrellcam-lite therefore does the following:
+
+| Check | What it does |
+| --- | --- |
+| Must be a mount point | Found in `/proc/mounts`; an ordinary directory does not count |
+| Must not be the root filesystem | Prevents the root partition from being used as a storage target |
+| Writability is proven | An actual temporary file is created instead of trusting the permission bits |
+| Checked before writing | Re-validated **before every single recording** |
+| Checked in the background | The `StorageMonitor` thread re-validates every three seconds |
+
+#### What happens when the drive is pulled out
+
+The default behaviour is to **pause recording and show a warning** (the top bar turns red and the Media page shows
+the exact reason) rather than quietly writing back to the SD card.
+
+Two switches (checkboxes on the Storage location panel, or edit `config.json` directly):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `media.require_mount` | `true` | The target has to be a real mount point. Turning it off allows any ordinary directory (not recommended) |
+| `media.fallback_internal` | `false` | Whether to fall back to the internal storage when the device disappears. `true` keeps recording on the SD card, the interface shows "Fell back", and the switch is automatic once the device returns |
+
+The event index `events.json` **always lives in the internal storage**, so pulling the USB drive out never loses the
+event list. (In v2.5.0 and earlier the index followed `media.dir`; the upgrade picks it up from the old location
+automatically.)
+
+#### From the command line
+
+```bash
+# List the detected storage devices and the current state
+curl -s http://pi.local:8080/api/storage
+
+# Switch to the USB drive (the directory must be a real mount point right now,
+# otherwise the API answers 400 and explains why)
+curl -X POST http://pi.local:8080/api/storage \
+  -H 'Content-Type: application/json' \
+  -d '{"dir":"/media/pi/USB","require_mount":true,"fallback_internal":false}'
+
+# Switch back to the internal storage
+curl -X POST http://pi.local:8080/api/storage \
+  -H 'Content-Type: application/json' \
+  -d '{"dir":""}'
+```
+
+The response looks like this:
+
+```json
+{
+  "ok": true,
+  "storage": {
+    "configured": "/media/pi/USB",
+    "effective": "/media/pi/USB",
+    "internal": "/home/pi/pikrellcam-lite/media",
+    "available": true,
+    "fallback": false,
+    "reason": "",
+    "require_mount": true,
+    "fallback_internal": false,
+    "devices": [
+      {"path": "/media/pi/USB", "kind": "usb", "mounted": true,
+       "free_bytes": 15267889152, "free_human": "14.2 GB", "ok": true, "reason": ""}
+    ],
+    "usage": {"total": 15825393664, "free": 15267889152,
+              "total_human": "14.7 GB", "free_human": "14.2 GB"}
+  }
+}
+```
+
+#### Mounting a USB drive by hand
+
+Right after plugging the drive in, the system may not have mounted it yet. Look at the partitions first:
+
+```bash
+lsblk -f
+```
+
+And mount it by hand if needed:
+
+```bash
+sudo mkdir -p /media/pi/USB
+sudo mount /dev/sda1 /media/pi/USB     # use the partition name from lsblk
+```
+
+Once it is mounted, go back to the **Media** tab and click **Refresh list** — the device then appears in the
+dropdown.
+
+> Tip: `/media/pi/USB` is only a common convention; the real mount point is whatever `/proc/mounts` and `lsblk -f`
+> report. The dropdown lists the **actual mount points the system currently has**, so just pick one.
+
 ---
 
 ## 8. Timelapse, Servo, Scheduled Commands, and Event Hooks
@@ -708,6 +812,8 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `media.dir` | `""` | Media directory. Empty means `~/pikrellcam-lite/media/`; a relative path is resolved against the shared root, an absolute path is used as-is, for example `/mnt/usb`. |
+| `media.require_mount` | `true` | Whether an external target must be a real mount point (prevents a pulled-out USB drive from filling up the SD card). |
+| `media.fallback_internal` | `false` | Whether to fall back to the internal storage when the external storage is unavailable; `false` pauses recording and warns instead. |
 | `media.archive_target` | `""` | Remote archive target in the form `user@host:/path`. |
 
 ### 9.7 servo — Servo
@@ -765,7 +871,7 @@ The service hot-reloads the configuration file (scheduled commands and region pr
 
 ## 10. API Reference
 
-There are **54 HTTP endpoints** in total: 49 `/api/*` endpoints plus 5 page and static-file routes. Once password protection is enabled, every `/api/` endpoint except `/api/auth`, `/api/auth/login`, and `/login` returns `401` when unauthenticated.
+There are **56 HTTP endpoints** in total: 51 `/api/*` endpoints plus 5 page and static-file routes. Once password protection is enabled, every `/api/` endpoint except `/api/auth`, `/api/auth/login`, and `/login` returns `401` when unauthenticated.
 
 ### 10.1 Read-Only Endpoints
 
@@ -790,6 +896,7 @@ There are **54 HTTP endpoints** in total: 49 `/api/*` endpoints plus 5 page and 
 | GET | `/api/release` | `{version, release, current, releases, root}` | The running version and all retained historical versions. |
 | GET | `/api/system` | status object | Model, system version, Python version, directories, hostname, uptime. |
 | GET | `/api/i18n` | `{language, available, strings}` | Current language, all available languages, and the string dictionary. |
+| GET | `/api/storage` | `{ok, storage}` | The detected storage devices and the current storage state. |
 | GET | `/snapshot.jpg` | JPEG | The most recent frame as a still image. |
 | GET | `/video_feed` | multipart stream | The MJPEG live preview stream. |
 
@@ -833,6 +940,7 @@ There are **54 HTTP endpoints** in total: 49 `/api/*` endpoints plus 5 page and 
 | DELETE | `/api/events/<eid>` | none | Delete an event along with its recording and thumbnails. |
 | POST | `/api/purge` | `{"what": "all"\|"videos"\|"stills"}` | Bulk-delete media files; returns the number removed. |
 | POST | `/api/archive` | `{"id": "20261111_203015"}` | `scp` the event recording to `media.archive_target`. |
+| POST | `/api/storage` | `{"dir": "/media/pi/USB", "require_mount": true, "fallback_internal": false}` | Switch the recording storage target. Answers `400` with the reason when the target is not a real mount point. |
 
 ### 10.4 Page Routes
 

@@ -49,6 +49,14 @@ class Timelapse:
         with self._lock:
             if self._running:
                 return self.status()
+            # 存储不可用时不要开始抓帧，否则帧会写进已经拔掉的 U 盘目录
+            try:
+                ok, reason, _ = self.config.media_write_target()
+            except Exception:
+                ok, reason = True, ""
+            if not ok:
+                self.state.set("error", f"存储不可用，无法开始延时摄影：{reason}")
+                return {"ok": False, "error": reason, **self.status()}
             self._period = float(period or self.config.get("timelapse", "period", default=30))
             self._period = max(1.0, self._period)
             self._index = 0

@@ -6,7 +6,7 @@
 
 访问地址：**http://pi.local:8080/**
 
-当前版本：**v2.5.0**
+当前版本：**v2.6.0**
 
 > [!NOTE]
 > **本项目是非官方独立实现**，与 [PiKrellCam](https://github.com/billw2/pikrellcam) 的作者、
@@ -14,6 +14,8 @@
 > 代码为全新实现，详见[致谢与参考](#致谢与参考)。
 
 ---
+
+> 📋 **与上游官方项目的功能对照**见 [`docs/上游功能对照.md`](docs/上游功能对照.md)：逐项列出哪些功能已覆盖、哪些部分覆盖、哪些缺失，以及本项目独有的部分。
 
 ## 致谢与参考
 
@@ -153,7 +155,7 @@
 | 30 | 30.0 | 12.4 ms | 57.5% |
 
 `jpeg_ms` 不随帧率变化，说明采集是瓶颈、编码有余量。
-**树莓派 3B 建议保持 10fps**（默认���），4/5 可上调到 20～30fps。
+**树莓派 3B 建议保持 10fps**（默认 10fps），4/5 可上调到 20～30fps。
 
 ### 自动编译与降级
 
@@ -318,6 +320,55 @@ LANGUAGES = {
 
 ---
 
+## 外部存储（v2.6.0+）
+
+录像、抓拍和延时摄影可以写到 **U 盘 / 移动硬盘 / 外接 SD 卡**，而不只是树莓派的 SD 卡。
+在「媒体」页的 **存储位置** 面板里选设备、点「应用存储设置」即可，**不需要重启服务**。
+
+### 为什么这件事需要小心处理
+
+U 盘被拔掉之后，**挂载点目录还留在 SD 卡上**（只是变成了一个空目录）。
+如果此时只判断「路径存不存在」，程序会认为一切正常，录像就会继续往 SD 卡里写——
+长期运行下来把系统分区撑满，**树莓派直接变砖，开不了机**。
+
+所以本项目的做法是：
+
+1. 目标必须是**真正的挂载点**（在 `/proc/mounts` 里能查到），不能是普通目录；
+2. 不能指向**根文件系统**；
+3. 可写性要**实测**——真的建一个临时文件，而不是只看权限位；
+4. **每次开始录像前**都重新校验一次，后台还有线程每 3 秒复查一次。
+
+### 拔盘之后会发生什么
+
+默认行为是 **暂停录像并在界面上告警**（顶栏变红），**而不是**悄悄写回 SD 卡：
+
+- `media.require_mount`（默认 `true`）：要求目标必须是挂载点；
+- `media.fallback_internal`（默认 `false`）：设备拔出时是否回退到内置存储。
+  设为 `true` 则拔盘后自动继续用 SD 卡录像，界面会提示「已回退」。
+
+事件索引 `events.json` **始终保存在内置存储**，所以拔掉 U 盘也不会丢事件列表。
+
+### 命令行
+
+```bash
+# 查看检测到的存储设备与当前状态
+curl -s http://pi.local:8080/api/storage
+
+# 切到 U 盘（目录必须是当前真实挂载点，否则返回 400 并说明原因）
+curl -s -X POST -H "Content-Type: application/json" \
+     -d '{"dir":"/media/pi/USB","require_mount":true,"fallback_internal":false}' \
+     http://pi.local:8080/api/storage
+
+# 切回内置存储
+curl -s -X POST -H "Content-Type: application/json" \
+     -d '{"dir":""}' http://pi.local:8080/api/storage
+```
+
+> 提示：U 盘刚插上时系统可能还没自动挂载。可以先 `lsblk -f` 看一眼分区，
+> 必要时 `sudo mkdir -p /media/pi/USB && sudo mount /dev/sda1 /media/pi/USB` 手动挂上。
+
+---
+
 ## 部署
 
 ### 方式一：版本化发布（推荐）
@@ -478,7 +529,9 @@ systemctl --user restart pikrellcam-lite.service
 | `timelapse.period` | `30` | 延时摄影抓帧间隔（秒） |
 | `web.port` | `8080` | 监听端口 |
 | `web.password_hash` | `""` | `sha256:<hex>`，空表示不启用密码保护 |
-| `media.dir` | `""` | 媒体目录，空表示用应用目录下 `media/`；可指向 `/mnt/usb` 等 |
+| `media.dir` | `""` | 媒体目录，空表示用应用目录下 `media/`；可指向 `/mnt/usb` 等外部存储挂载点 |
+| `media.require_mount` | `true` | 外部存储目标是否必须是真正的挂载点（防止 U 盘拔出后写爆 SD 卡） |
+| `media.fallback_internal` | `false` | 外部存储不可用时是否回退到内置存储；`false` = 暂停录像并告警 |
 | `media.archive_target` | `""` | 远程归档目标，形如 `user@host:/path` |
 | `servo.pan_pin` / `tilt_pin` | `18` / `17` | BCM 引脚号 |
 | `servo.positions` | 3 个预设 | `[{name,pan,tilt}]`，每个位置可绑定设置预设 |

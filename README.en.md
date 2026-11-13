@@ -4,7 +4,7 @@ A **motion-detection recording service** for Raspberry Pi OS (Debian 13 / trixie
 set of web features of the official [PiKrellCam](https://github.com/billw2/pikrellcam), implements them on the
 current **libcamera / picamera2** camera stack, and additionally supports **USB cameras**.
 
-Access URL: **http://pi.local:8080/** — current version: **v2.5.0**
+Access URL: **http://pi.local:8080/** — current version: **v2.6.0**
 
 `CSI + USB cameras` `libcamera / picamera2` `Frame-differencing motion detection` `Native C kernel` `Event recording with pre/post-roll` `Graphical motion regions` `Dual far/near algorithms` `Timelapse` `Servo pan/tilt` `Scheduled commands` `Event hooks` `Bilingual UI` `Versioned releases with one-command rollback`
 
@@ -15,6 +15,8 @@ Access URL: **http://pi.local:8080/** — current version: **v2.5.0**
 > [Acknowledgements and References](#acknowledgements-and-references).
 
 ---
+
+> 📋 **A feature-by-feature comparison with the upstream project** is in [`docs/上游功能对照.md`](docs/上游功能对照.md): which features are covered, which are partially covered, which are missing, and what pikrellcam-lite has that upstream does not.
 
 ## Acknowledgements and References
 
@@ -330,6 +332,63 @@ Simplified Chinese, so the interface never goes blank.
 
 ---
 
+## External Storage (since v2.6.0)
+
+Recordings, snapshots and timelapse videos can be written to a **USB drive, a portable hard disk or an external
+SD card** instead of the Raspberry Pi's own SD card. Pick a device in the **Storage location** panel on the Media
+tab and click **Apply storage settings** — **no restart needed**.
+
+### Why this needs careful handling
+
+After a USB drive is pulled out, **the mount point directory stays behind on the SD card** (it is simply an empty
+directory now). If the program only asks "does this path exist?", it concludes that everything is fine and keeps
+writing the recordings into the SD card. Over time that fills up the system partition and **bricks the Raspberry
+Pi — it will no longer boot**.
+
+This project therefore does the following:
+
+1. The target must be a **real mount point** (findable in `/proc/mounts`), not an ordinary directory;
+2. It must not point at the **root filesystem**;
+3. Writability is **proven** — an actual temporary file is created instead of trusting the permission bits;
+4. The target is re-validated **before every single recording**, and a background thread re-checks it every three
+   seconds.
+
+### What happens when the drive is pulled out
+
+The default behaviour is to **pause recording and show a warning** (the top bar turns red) rather than quietly
+writing back to the SD card:
+
+- `media.require_mount` (default `true`): the target has to be a mount point;
+- `media.fallback_internal` (default `false`): whether to fall back to the internal storage when the device
+  disappears. Set it to `true` to keep recording on the SD card while the drive is away; the interface then shows
+  that it has fallen back.
+
+The event index (`events.json`) **always lives in the internal storage**, so pulling the USB drive out never loses
+the event list.
+
+### From the command line
+
+```bash
+# List the detected storage devices and the current state
+curl -s http://pi.local:8080/api/storage
+
+# Switch to the USB drive (the directory must be a real mount point right now,
+# otherwise the API answers 400 and explains why)
+curl -s -X POST -H "Content-Type: application/json" \
+     -d '{"dir":"/media/pi/USB","require_mount":true,"fallback_internal":false}' \
+     http://pi.local:8080/api/storage
+
+# Switch back to the internal storage
+curl -s -X POST -H "Content-Type: application/json" \
+     -d '{"dir":""}' http://pi.local:8080/api/storage
+```
+
+> Tip: right after plugging the drive in, the system may not have mounted it yet. Run `lsblk -f` to look at the
+> partitions, and if needed mount it by hand with
+> `sudo mkdir -p /media/pi/USB && sudo mount /dev/sda1 /media/pi/USB`.
+
+---
+
 ## Deployment
 
 ### Method 1: Versioned Publishing (recommended)
@@ -493,8 +552,10 @@ systemctl --user restart pikrellcam-lite.service
 | `web.port` | `8080` | Listen port |
 | `web.password_hash` | `""` | `sha256:<hex>`; an empty value disables password protection |
 | `web.language` | `auto` | Interface language: `auto` (negotiated from the browser's `Accept-Language`) / `zh-CN` / `en-US` |
-| `media.dir` | `""` | Media directory; empty means `media/` under the application root, and it can point at `/mnt/usb` and similar |
-| `media.archive_target` | `""` | Remote archive target in the form `user@host:/path` |
+| `media.dir` | `""` | Media directory; empty means `media/` under the application root, and it can point at an external mount such as `/mnt/usb` |
+| `media.require_mount` | `true` | Whether an external target must be a real mount point (prevents a pulled-out USB drive from filling up the SD card) |
+| `media.fallback_internal` | `false` | Whether to fall back to the internal storage when the external storage is unavailable; `false` pauses recording and warns instead |
+| `media.archive_target` | `""` | Remote archive target, in the form `user@host:/path` |
 | `servo.pan_pin` / `tilt_pin` | `18` / `17` | BCM pin numbers |
 | `servo.positions` | 3 presets | `[{name,pan,tilt}]`; each position can be bound to a settings preset |
 | `hooks.*` | `""` | Event hook commands, supporting the `{id} {video} {thumb} {time} {date} {duration} {algorithm} {region} {media_dir}` placeholders |

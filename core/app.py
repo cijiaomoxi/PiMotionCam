@@ -18,6 +18,7 @@ from .recorder import Recorder
 from .scheduler import Scheduler
 from .servo import Servo
 from .state import RuntimeState
+from .storage import StorageMonitor
 from .timelapse import Timelapse
 
 LOG_DIR = ROOT_DIR / "logs"
@@ -42,6 +43,7 @@ class AppService:
         self.timelapse = Timelapse(self.config, self.state, self.camera, self.hooks, log=self.log)
         self.servo = Servo(self.config, self.state, log=self.log)
         self.scheduler = Scheduler(self.config, self.run_command, log=self.log)
+        self.storage = StorageMonitor(self.config, self.state, log=self.log)
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -81,6 +83,7 @@ class AppService:
             self._warm_native()
             self.camera.start()
             self.scheduler.start()
+            self.storage.start()
             self.log("service started")
 
     def _warm_native(self):
@@ -98,6 +101,7 @@ class AppService:
     def stop(self) -> None:
         with self._lock:
             self.scheduler.stop()
+            self.storage.stop()
             self.recorder.stop()
             self.camera.stop()
             self.state.update(running=False, camera_ready=False, recording=False)
@@ -163,6 +167,9 @@ class AppService:
                 frame = self.camera.latest
                 if not frame:
                     return "no frame"
+                ok, reason, _ = self.config.media_write_target()
+                if not ok:
+                    return f"storage unavailable: {reason}"
                 name = time.strftime("still_%Y%m%d_%H%M%S.jpg")
                 path = self.config.media_sub("stills") / name
                 path.write_bytes(frame)

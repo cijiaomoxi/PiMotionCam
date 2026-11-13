@@ -232,6 +232,31 @@
 <!-- ============================ 媒体 ============================ -->
 <section class="tabpage" id="page-media">
   <div class="panel">
+    <h2><span data-i18n="panel.storage">存储位置</span> <span class="tag" id="storage-tag">–</span>
+      <span class="spacer"></span>
+      <button id="btn-storage-refresh" class="sm" data-i18n="btn.refreshList">刷新列表</button>
+    </h2>
+    <div class="cols">
+      <label class="field"><span data-i18n="label.storageTarget">录像存储目标</span>
+        <select id="storage-dir"></select></label>
+      <label class="field"><span data-i18n="label.storageUsage">当前占用</span>
+        <b class="val" id="storage-usage">–</b></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="check"><input type="checkbox" id="storage-require-mount">
+        <span data-i18n="label.storageRequireMount">目标必须是挂载点</span></label>
+      <label class="check"><input type="checkbox" id="storage-fallback">
+        <span data-i18n="label.storageFallback">设备拔出时回退到内置存储</span></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btn-storage-apply" class="primary" data-i18n="btn.applyStorage">应用</button>
+      <span class="hint" id="storage-hint"></span>
+    </div>
+    <p class="hint" data-i18n="hint.storageSafety">安全提示：默认在外部存储被拔出时暂停录像，而不是悄悄写回 SD 卡——否则长期运行会把系统分区撑满。</p>
+    <div class="rlist" id="storage-devices" style="margin-top:8px"></div>
+  </div>
+
+  <div class="panel">
     <h2><span data-i18n="panel.timelapse">延时摄影</span> <span class="tag" id="tl-state" data-i18n="tl.notRunning">未运行</span>
       <span class="spacer"></span>
       <span class="hint" id="tl-detail"></span>

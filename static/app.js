@@ -142,9 +142,14 @@ function renderState(s) {
   ST = s;
   const det = s.detection || {};
   const moving = !!(s.motion || det.motion);
+  const sto = s.storage || {};
 
   const pill = $('status-pill');
-  if (s.error) {
+  if (!sto.available && sto.reason) {
+    // 存储异常比普通状态更紧急：外部存储掉了，用户必须马上知道
+    pill.className = 'pill bad';
+    pill.textContent = t('storage.paused', { r: sto.reason });
+  } else if (s.error) {
     pill.className = 'pill bad';
     pill.textContent = t('err.prefix') + s.error;
   } else if (!s.running) {
@@ -157,6 +162,7 @@ function renderState(s) {
     pill.className = 'pill ok';
     pill.textContent = t('state.running');
   }
+  renderStorageBadge(sto);
 
   setText('m-fps', (s.fps || 0).toFixed(1));
   setText('m-dfps', (s.detect_fps || 0).toFixed(1));
@@ -880,6 +886,155 @@ $('btn-purge-videos').addEventListener('click', () => purge('videos', 'label.vid
 $('btn-purge-stills').addEventListener('click', () => purge('stills', 'label.stills'));
 
 /* =====================================================================
+ * 存储位置（USB / 外部存储）
+ *
+ * 默认策略：外部存储被拔出时**暂停录像**而不是悄悄写回 SD 卡。
+ * 写回 SD 卡会在长期运行后把根分区撑满，树莓派直接变砖。
+ * ===================================================================*/
+let STORAGE = null;
+
+function storageKindLabel(kind) {
+  if (kind === 'internal') return t('storage.internal');
+  if (kind === 'usb') return t('storage.usb');
+  if (kind === 'sdcard') return t('storage.sdcard');
+  if (kind === 'external') return t('storage.external');
+  return t('storage.unknown');
+}
+
+function storageStateLabel(s) {
+  if (!s) return '';
+  if (!s.available) return t('storage.unavailable');
+  if (s.fallback) return t('storage.fallback');
+  return t('storage.ok');
+}
+
+/** 只刷新存储标签与提示——每秒轮询 /api/state 时用，不触发设备枚举。 */
+function renderStorageBadge(s) {
+  const sto = s || {};
+  const tag = $('storage-tag');
+  if (tag) {
+    tag.textContent = storageStateLabel(sto);
+    tag.className = 'tag' + (sto.available ? (sto.fallback ? ' warn' : ' ok') : ' danger');
+  }
+  const hint = $('storage-hint');
+  if (hint) {
+    if (!sto.available && sto.reason) {
+      hint.textContent = t('storage.paused', { r: sto.reason });
+      hint.className = 'hint warn';
+    } else if (sto.fallback && sto.reason) {
+      hint.textContent = t('storage.fallbackNote', { r: sto.reason });
+      hint.className = 'hint warn';
+    } else {
+      hint.textContent = '';
+      hint.className = 'hint';
+    }
+  }
+}
+
+async function loadStorage() {
+  try {
+    const r = await GET('/api/storage');
+    const s = (r && r.storage) || {};
+    STORAGE = s;
+
+    const devs = s.devices || [];
+    const cur = s.configured || '';
+    const internalPath = s.internal || '';
+    // 内置存储一律用"空路径"表示（media.dir 留空 = 用应用目录下 media/），
+    // 这样配置里不会留下写死的绝对路径。
+    const isInternal = (p) => !p || p === internalPath;
+
+    // 下拉框：内置存储永远排第一，后面跟检测到的外部设备
+    const sel = $('storage-dir');
+    if (sel) {
+      const seen = {};
+      const opts = [];
+      const push = (value, label) => {
+        if (seen[value]) return;
+        seen[value] = 1;
+        opts.push({ value: value, label: label });
+      };
+      push('', t('storage.internalOption'));
+      devs.forEach((d) => {
+        // 内置存储已经用"空路径"这一项代表了，不再重复列出，
+        // 否则下拉框里会出现两条含义相同的"内置存储"。
+        if (d.kind === 'internal') return;
+        push(d.path, d.label + ' · ' + d.path + ' · ' + storageKindLabel(d.kind) +
+          ' · ' + (d.free_human || '-') + ' ' + t('storage.free'));
+      });
+      if (cur && !isInternal(cur)) push(cur, cur);   // 兜底：当前配置一定可选
+      sel.innerHTML = opts.map((o) =>
+        '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>').join('');
+      sel.value = isInternal(cur) ? '' : cur;
+    }
+
+    const rm = $('storage-require-mount');
+    if (rm) rm.checked = !!s.require_mount;
+    const fb = $('storage-fallback');
+    if (fb) fb.checked = !!s.fallback_internal;
+
+    setText('storage-tag', storageStateLabel(s));
+    const tag = $('storage-tag');
+    if (tag) {
+      tag.className = 'tag' + (s.available ? (s.fallback ? ' warn' : ' ok') : ' danger');
+    }
+
+    const u = s.usage || {};
+    setText('storage-usage', (u.free_human || '-') + ' / ' + (u.total_human || '-'));
+
+    // 设备明细
+    const box = $('storage-devices');
+    if (box) {
+      box.innerHTML = devs.length ? devs.map((d) => {
+        const badge = d.ok
+          ? '<span class="tag ok">' + t('storage.ok') + '</span>'
+          : '<span class="tag danger">' + esc(d.reason || t('storage.unavailable')) + '</span>';
+        const kind = d.kind === 'internal'
+          ? t('storage.internal')
+          : storageKindLabel(d.kind);
+        return '<div class="rrow"><span class="nm">' + esc(d.label || d.path) + '</span>' +
+          '<span class="pc">' + esc(d.path) + ' · ' + esc(kind) + '</span>' + badge + '</div>';
+      }).join('') : '<p class="hint">' + t('storage.noDevices') + '</p>';
+    }
+
+    // 不可用时把原因直接摆在面板上
+    const hint = $('storage-hint');
+    if (hint) {
+      if (!s.available && s.reason) {
+        hint.textContent = t('storage.paused', { r: s.reason });
+        hint.className = 'hint warn';
+      } else if (s.fallback && s.reason) {
+        hint.textContent = t('storage.fallbackNote', { r: s.reason });
+        hint.className = 'hint warn';
+      } else {
+        hint.textContent = '';
+        hint.className = 'hint';
+      }
+    }
+  } catch (e) { /* 忽略 */ }
+}
+
+async function saveStorage() {
+  const body = {
+    dir: $('storage-dir') ? $('storage-dir').value : '',
+    require_mount: $('storage-require-mount') ? $('storage-require-mount').checked : true,
+    fallback_internal: $('storage-fallback') ? $('storage-fallback').checked : false
+  };
+  try {
+    const r = await POST('/api/storage', body);
+    if (r && r.error) throw new Error(r.error);
+    await loadStorage();
+    toast(t('toast.storageSaved'), 'ok');
+  } catch (e) {
+    toast(t('err.storageSaveFailed') + (e.message || ''), 'err');
+    await loadStorage();
+  }
+}
+
+$('btn-storage-apply').addEventListener('click', saveStorage);
+$('btn-storage-refresh').addEventListener('click', loadStorage);
+
+/* =====================================================================
  * 定时命令
  * ===================================================================*/
 
@@ -1370,7 +1525,7 @@ $('btn-logout').addEventListener('click', async () => {
 const TAB_LOADERS = {
   preview: () => { loadRegions(); loadConfig(); },
   detect: () => { loadConfig(); loadAlgo(); loadPresets(); },
-  media: () => { loadEvents(); loadFiles('videos'); loadFiles('stills'); loadTimelapse(); },
+  media: () => { loadEvents(); loadFiles('videos'); loadFiles('stills'); loadTimelapse(); loadStorage(); },
   schedule: () => { loadSchedules(); },
   servo: () => { loadServo(); },
   system: () => { loadHooks(); loadHelp(); loadSystem(); loadLog(); loadCameras(); loadReleaseInfo(); }

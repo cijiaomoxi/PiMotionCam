@@ -112,7 +112,7 @@ REQUIRED=(
   "core/__init__.py" "core/app.py" "core/camera.py" "core/config.py"
   "core/detect.py" "core/hooks.py" "core/i18n.py" "core/native.py"
   "core/presets.py" "core/recorder.py" "core/scheduler.py" "core/servo.py"
-  "core/state.py" "core/timelapse.py" "core/util.py" "core/web.py"
+  "core/state.py" "core/storage.py" "core/timelapse.py" "core/util.py" "core/web.py"
   "core/_pkc_native.c"
   "core/locales/zh-CN.json" "core/locales/en-US.json"
   "templates/index.html" "templates/login.html"

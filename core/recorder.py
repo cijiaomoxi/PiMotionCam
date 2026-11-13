@@ -103,8 +103,13 @@ class Recorder:
         self._ffmpeg_err_fh = None
         self._tmp = Path("/tmp/pikrellcam-lite")
         self._events: list[dict] = []
-        self._events_file = config.media_sub("events.json")
+        # 事件索引固定放在内置存储：外部存储拔出/换盘时索引不会丢
+        self._events_file = config.internal_media_dir() / "events.json"
+        self._legacy_events_file = config.media_sub("events.json")
         self._load_events()
+        # 事件总数要在启动时就同步到运行时状态，否则重启后顶栏的"事件"计数
+        # 会一直显示 0，直到下一个事件结束才更新。
+        self.state.set("events_total", len(self._events))
         self._sweep_broken_videos()
 
     # ------------------------------------------------------------------
@@ -112,6 +117,9 @@ class Recorder:
         try:
             if self._events_file.exists():
                 self._events = json.loads(self._events_file.read_text())
+            elif self._legacy_events_file.exists():
+                # 兼容旧版本：索引曾经跟着 media.dir 放在外部存储里
+                self._events = json.loads(self._legacy_events_file.read_text())
             else:
                 self._events = []
         except Exception:
@@ -259,8 +267,30 @@ class Recorder:
         )
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    def _storage_ready(self) -> bool:
+        """写媒体前的实时校验。
+
+        外部存储最危险的失败模式是"U 盘拔出后路径依然存在"——它只是
+        变成了 SD 卡上的一个空目录。这时若继续录像，文件会悄悄写回
+        SD 卡，把根分区撑爆，树莓派直接变砖。
+
+        所以每次开新事件前都确认一次：目标必须此刻仍是挂载点。
+        """
+        try:
+            ok, reason, _ = self.config.media_write_target()
+        except Exception:
+            return True
+        if not ok:
+            self.state.set("error", f"存储不可用，已暂停录像：{reason}")
+            return False
+        return True
+
     def _start_event(self, frame: bytes, now: float, bbox=None,
                       algorithm: str | None = None, region: str | None = None):
+        # 存储不可用时直接放弃本次事件（不启动 ffmpeg）
+        if not self._storage_ready():
+            return
         self._event_id = time.strftime("%Y%m%d_%H%M%S")
         self._event_start = now
         self._event_frames = 0

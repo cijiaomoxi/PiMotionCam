@@ -23,6 +23,7 @@ from .i18n import available as i18n_available
 from .i18n import resolve as resolve_language
 from .i18n import strings as i18n_strings
 from .i18n import translate as i18n_translate
+from .storage import check_target
 from .util import dir_size, human_size, run_command, tail_file
 
 def _make_placeholder_jpeg() -> bytes:
@@ -51,8 +52,10 @@ HELP_SECTIONS = [    {"title": "概览", "body": "pikrellcam-lite 是一个基�
     {"title": "录像", "body": "触发后先写入预录缓冲中的历史帧，再继续录制补录时长，"
                               "结束后由 ffmpeg 统一编码为 H.264 MP4，并生成整帧缩略图与"
                               "运动目标裁剪缩略图。"},
-    {"title": "定时命令", "body": "可按星期+时刻或固定间隔执行命令，命令可以是内部命令"
-                                  "（record on、tl_start 30 等）、FIFO 命令或任意 shell 命令。"},
+    {"title": "定时命令", "body": "可按星期+时刻或固定间隔执行命令。命令可以是内部命令"
+                                  "（record on、tl_start 30 等）；也可以在"
+                                  " ~/.pikrellcam/at-commands.conf 里写任意 shell 命令，"
+                                  "网页上的命令框只接受内部命令。"},
     {"title": "舵机", "body": "支持 RPi.GPIO 或 ServoBlaster 驱动云台舵机，可保存位置预设并"
                               "设置平移俯仰限位与平滑移动时间。"},
     {"title": "运维", "body": "systemctl --user status pikrellcam-lite 查看状态；"
@@ -207,6 +210,7 @@ def create_app(service) -> Flask:
         st["auth_required"] = bool(cfg["web"].get("password_hash"))
         st["camera"] = service.camera.camera_info
         st["release"] = _release_info()
+        st["storage"] = service.config.media_status()
         return jsonify(st)
 
     @app.route("/api/config", methods=["GET"])
@@ -463,6 +467,9 @@ def create_app(service) -> Flask:
         frame = service.camera.latest
         if not frame:
             return jsonify({"ok": False, "error": "没有可用帧"}), 400
+        ok, reason, _ = service.config.media_write_target()
+        if not ok:
+            return jsonify({"ok": False, "error": f"存储不可用：{reason}"}), 409
         name = f"still_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
         (service.config.media_sub("stills")).mkdir(parents=True, exist_ok=True)
         (service.config.media_sub("stills") / name).write_bytes(frame)
@@ -524,6 +531,53 @@ def create_app(service) -> Flask:
         what = (request.get_json(silent=True) or {}).get("what", "all")
         n = service.recorder.purge(what)
         return jsonify({"ok": True, "removed": n})
+
+    # ------------------------------------------------------------------
+    # 存储位置（USB / 外部存储）
+    # ------------------------------------------------------------------
+    @app.route("/api/storage", methods=["GET"])
+    def api_storage_get():
+        """列出候选存储设备，并返回当前存储状态。"""
+        service.storage.tick()
+        return jsonify({"ok": True, "storage": service.storage.status()})
+
+    @app.route("/api/storage", methods=["POST"])
+    def api_storage_post():
+        """切换录像的存储位置。
+
+        请求体：
+          dir                目标目录；留空 = 使用内置存储（SD 卡）
+          require_mount      是否要求目标必须是真正的挂载点（默认 True）
+          fallback_internal  外部存储不可用时是否回退到内置存储（默认 False）
+        """
+        data = request.get_json(silent=True) or {}
+        patch = {}
+        if "dir" in data:
+            patch["dir"] = str(data.get("dir") or "").strip()
+        if "require_mount" in data:
+            patch["require_mount"] = bool(data.get("require_mount"))
+        if "fallback_internal" in data:
+            patch["fallback_internal"] = bool(data.get("fallback_internal"))
+        if not patch:
+            return jsonify({"ok": False, "error": "没有可更新的存储配置"}), 400
+
+        internal = str(service.config.internal_media_dir())
+        raw = str(patch.get("dir",
+                            service.config.get("media", "dir", default="")) or "").strip()
+        require_mount = patch.get(
+            "require_mount",
+            service.config.get("media", "require_mount", default=True))
+        if raw:
+            ok, reason = check_target(raw, require_mount=require_mount,
+                                      internal_path=internal)
+            if not ok:
+                return jsonify({"ok": False, "error": reason,
+                                "storage": service.storage.status()}), 400
+
+        service.config.set({"media": patch})
+        service.storage.tick()
+        service.config.ensure_dirs()
+        return jsonify({"ok": True, "storage": service.storage.status()})
 
     @app.route("/api/archive", methods=["POST"])
     def api_archive():

@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import PKC_DIR
+from .util import run_command
 
 WEEKDAYS = {
     "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
@@ -92,7 +93,19 @@ class Scheduler:
                 days, when, command = parts[0], parts[1], parts[2].strip().strip('"')
                 entry = {"days": days, "time": when, "command": command, "source": str(path)}
                 if ":" not in when:
-                    entry["interval_minutes"] = int(when) if when.isdigit() else 1
+                    # 官方还支持 start / hour / minute / 5minute 这类时间写法，
+                    # 这里折算成"固定分钟间隔"。
+                    spec = when.strip().lower()
+                    if spec == "start":
+                        entry["interval_minutes"] = 1440       # 每天一次
+                    elif spec == "hour":
+                        entry["interval_minutes"] = 60
+                    elif spec == "minute":
+                        entry["interval_minutes"] = 1
+                    elif spec.endswith("minute") and spec[:-6].isdigit():
+                        entry["interval_minutes"] = max(1, int(spec[:-6]))
+                    else:
+                        entry["interval_minutes"] = 1
                 out.append(entry)
         except Exception:
             pass
@@ -143,7 +156,17 @@ class Scheduler:
                 time.sleep(2)
 
     # ------------------------------------------------------------------
-    def execute(self, command: str) -> str:
+    def execute(self, command: str, allow_shell: bool = False) -> str:
+        """执行一条命令。
+
+        `@` 前缀表示内部命令（record on、tl_start 30 等）。
+        `allow_shell=True` 时，不是内部命令的写法会交给 shell 执行——
+        这与官方 PiKrellCam 的 at-commands.conf 行为一致。
+
+        只有来自 `~/.pikrellcam/at-commands.conf` 的条目才会打开这个开关：
+        那个文件是本机用户自己维护的；而网页上的命令表是**通过网络**可写的，
+        若允许任意 shell，等于给局域网开了远程执行入口。
+        """
         cmd = (command or "").strip()
         if not cmd:
             return ""
@@ -151,6 +174,13 @@ class Scheduler:
             cmd = cmd[1:]
         try:
             res = self.command_handler(cmd)
+            if (allow_shell and isinstance(res, str)
+                    and res.startswith("unknown command:")):
+                rc, out, err = run_command(cmd, timeout=300)
+                self.log(f"shell command: {cmd} rc={rc}")
+                if rc != 0:
+                    return (err or out or f"exit {rc}")[-500:]
+                return (out or "ok")[-500:]
             return res if isinstance(res, str) else ("ok" if res is not None else "")
         except Exception as exc:  # noqa: BLE001
             self.log(f"command failed: {cmd}: {exc}")
@@ -176,6 +206,9 @@ class Scheduler:
             if e.get("enabled") is False:
                 continue
             key = f"{idx}:{e.get('command')}"
+            # 只有 ~/.pikrellcam/at-commands.conf 里的条目允许任意 shell；
+            # 网页上可写的命令表不允许（那等于把远程执行暴露给局域网）。
+            allow_shell = bool(e.get("source"))
             if "interval_minutes" in e:
                 interval = max(1, int(e.get("interval_minutes", 1)))
                 last = self._last_runs.get(key)
@@ -188,7 +221,7 @@ class Scheduler:
                         last_min = None
                 if last_min is None or (now_min - last_min) >= interval:
                     self._last_runs[key] = now.strftime("%Y-%m-%d %H:%M")
-                    self.execute(e["command"])
+                    self.execute(e["command"], allow_shell=allow_shell)
                 continue
             when = str(e.get("time", ""))
             if ":" not in when:
@@ -204,7 +237,7 @@ class Scheduler:
             if self._last_runs.get(key) == today:
                 continue
             self._last_runs[key] = today
-            self.execute(e["command"])
+            self.execute(e["command"], allow_shell=allow_shell)
 
     # ------------------------------------------------------------------
     def save_entry(self, entry: dict) -> list[dict]:

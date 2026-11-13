@@ -107,6 +107,10 @@ DEFAULT_CONFIG = {
     "media": {
         "dir": "",             # 空 = 使用应用目录下 media/；可改为 /mnt/usb 等
         "archive_target": "",  # 形如 user@host:/path，用于远程归档
+        # 外部存储必须是真正的挂载点（U 盘拔出后路径仍在，不做校验会写爆 SD 卡）
+        "require_mount": True,
+        # 外部存储不可用时是否回退到内置存储；False = 暂停录像并告警
+        "fallback_internal": False,
     },
     "servo": {
         "enabled": False,
@@ -155,6 +159,13 @@ class Config:
         self._data = copy.deepcopy(DEFAULT_CONFIG)
         self._mtime = 0.0
         self._version = 0
+        # 运行时媒体目录状态（不落盘）：由 StorageMonitor 周期性刷新。
+        # {"dir": 实际写入目录, "available": 是否可写, "reason": 原因,
+        #  "fallback": 是否已回退到内置存储, "target": 配置的目标目录}
+        self._media_runtime = {
+            "dir": "", "available": True, "reason": "",
+            "fallback": False, "target": "",
+        }
         self.load()
 
     # ------------------------------------------------------------------
@@ -253,19 +264,97 @@ class Config:
         return self._version
 
     # ------------------------------------------------------------------
-    def media_dir(self) -> Path:
+    # ------------------------------------------------------------------
+    # 媒体目录
+    #
+    # 三个概念要分清：
+    #   internal_media_dir()  内置存储（永远在 SD 卡上）
+    #   media_dir_configured() 用户配置的目标目录（可能是 USB）
+    #   media_dir()           此刻**实际**写入的目录（可能被运行时回退改写）
+    # ------------------------------------------------------------------
+    def internal_media_dir(self) -> Path:
+        """内置存储目录（永远在 SD 卡上，不随外部存储拔插变化）。"""
+        return ROOT_DIR / "media"
+
+    def media_dir_configured(self) -> Path:
+        """用户配置的目标目录，不做运行时回退。"""
         raw = (self.get("media", "dir") or "").strip()
         if raw:
             p = Path(raw).expanduser()
             return p if p.is_absolute() else (ROOT_DIR / p)
-        return ROOT_DIR / "media"
+        return self.internal_media_dir()
+
+    def media_dir(self) -> Path:
+        """当前实际写入的媒体目录。
+
+        运行时可被 StorageMonitor 改写：外部存储不可用且允许回退时，
+        这里会指向内置存储。
+        """
+        with self._lock:
+            runtime = self._media_runtime.get("dir")
+        if runtime:
+            return Path(runtime)
+        return self.media_dir_configured()
 
     def media_sub(self, name: str) -> Path:
         return self.media_dir() / name
 
+    def set_media_runtime(self, *, directory=None, available=True, reason="",
+                          fallback=False, target="") -> None:
+        """更新运行时媒体状态（由 StorageMonitor 调用，不落盘）。"""
+        with self._lock:
+            self._media_runtime = {
+                "dir": str(directory) if directory else "",
+                "available": bool(available),
+                "reason": reason or "",
+                "fallback": bool(fallback),
+                "target": str(target or ""),
+            }
+
+    @property
+    def media_available(self) -> bool:
+        """当前媒体目录是否可写（外部存储拔出时会变成 False）。"""
+        with self._lock:
+            return bool(self._media_runtime.get("available", True))
+
+    def media_status(self) -> dict:
+        """媒体存储状态快照（供 /api/storage 与界面显示）。"""
+        with self._lock:
+            rt = dict(self._media_runtime)
+        internal = self.internal_media_dir()
+        configured = self.media_dir_configured()
+        rt.setdefault("dir", "")
+        rt["configured"] = str(configured)
+        rt["internal"] = str(internal)
+        rt["effective"] = str(self.media_dir())
+        rt["external"] = str(configured) != str(internal)
+        rt["require_mount"] = bool(self.get("media", "require_mount", default=True))
+        rt["fallback_internal"] = bool(self.get("media", "fallback_internal", default=False))
+        return rt
+
+    def media_write_target(self) -> tuple[bool, str, Path]:
+        """写媒体前的**实时**校验，并同步运行时目标目录。
+
+        外部存储必须"此刻"仍是挂载点——U 盘拔出后挂载点目录还留在 SD 卡上，
+        只看路径存不存在会被骗过去，录像就会悄悄写回 SD 卡把根分区撑爆。
+
+        返回 (是否可写, 原因, 应当写入的目录)。
+        """
+        from . import storage as _storage   # 延迟导入，避免循环依赖
+
+        ok, reason, target = _storage.live_check(self)
+        configured = self.media_dir_configured()
+        fallback = ok and str(target) != str(configured)
+        self.set_media_runtime(directory=target, available=ok, reason=reason,
+                               fallback=fallback, target=str(configured))
+        return ok, reason, target
+
     def ensure_dirs(self) -> None:
         for sub in ("videos", "stills", "timelapse"):
             self.media_sub(sub).mkdir(parents=True, exist_ok=True)
+        # 内置存储目录必须始终存在：事件索引 events.json 放在这里，
+        # 外部存储拔出也不会丢。
+        self.internal_media_dir().mkdir(parents=True, exist_ok=True)
         PKC_DIR.mkdir(parents=True, exist_ok=True)
 
 

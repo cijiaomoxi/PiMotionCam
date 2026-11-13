@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 | --- | --- | --- |
+| [2.6.0](#260---2026-11-13) | 2026-11-13 | Record to USB / external storage with safe unplug handling |
 | [2.5.0](#250---2026-11-11) | 2026-11-11 | Bilingual interface (Chinese / English) |
 | [2.4.0](#240---2026-11-10) | 2026-11-10 | ISP hardware JPEG path, AE rework, working rotation / flip |
 | [2.3.2](#232---2026-11-10) | 2026-11-10 | Native kernel reports the release it was built from |
@@ -22,6 +23,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | [2.1.1](#211---2026-11-09) | 2026-11-09 | `GET /api/release`, camera selector on the preview tab |
 | [2.1.0](#210---2026-11-09) | 2026-11-09 | USB cameras, versioned publishing, servo pan/tilt |
 | [2.0.0](#200---2026-11-08) | 2026-11-08 | First release |
+
+---
+
+## [2.6.0] - 2026-11-13
+
+The external-storage release: recordings can be written to a USB drive or any other mounted filesystem, and
+pulling that drive out no longer silently fills up the SD card.
+
+### Added
+
+- `core/storage.py` — storage discovery and validation. It enumerates the candidate mount points
+  (`/media`, `/run/media`, `/mnt`), classifies each one as internal / USB / SD card / external, reports the free
+  space, and validates a target before it is used. The validation is deliberately strict: the path must be a real
+  mount point, it must not be the root filesystem, and writability is proven by actually creating a temporary file
+  instead of trusting the permission bits.
+- `GET /api/storage` lists the detected devices together with the current storage state; `POST /api/storage`
+  switches the recording target and the two safety switches.
+- The `media.dir`, `media.require_mount` and `media.fallback_internal` configuration keys.
+- `StorageMonitor` — a background thread that re-validates the target every three seconds and publishes the
+  result to the runtime state (`storage_available`, `storage_fallback`, `storage_path`, `storage_reason`).
+- A "存储位置 / Storage location" panel on the Media tab: the detected devices, the free space, the two safety
+  switches, and the current state. The top bar turns into a warning as soon as the target becomes unavailable.
+- 22 new strings in each language pack (407 in total).
+- `docs/上游功能对照.md` — an item-by-item comparison against the upstream [billw2/pikrellcam](https://github.com/billw2/pikrellcam):
+  which features are covered, which are partially covered, which are missing, and which ones pikrellcam-lite has that
+  upstream does not.
+
+### Changed
+
+- **The scheduled commands can run arbitrary shell commands again.** The web interface and the documentation both
+  promised it, but the implementation only ever dispatched the internal commands — an `at-commands.conf` entry such as
+  `daily 08:00 "python3 /home/pi/sync.py"` silently did nothing. The official PiKrellCam runs `at-commands.conf`
+  entries through the shell, so pikrellcam-lite now does the same: an entry that is not an internal command is passed
+  to the shell. Only `~/.pikrellcam/at-commands.conf` gets this — the command table in the web interface is writable
+  over the network and therefore still restricted to internal commands.
+- `at-commands.conf` accepts the `start` / `hour` / `minute` / `5minute` time specifications as well; they are
+  translated into a fixed minute interval.
+- The event index (`events.json`) always lives in the internal storage. It used to follow `media.dir`, which meant
+  that unplugging the USB drive also took the event list with it. Existing indexes are picked up automatically.
+- `Config.media_dir()` now resolves the directory that is actually written to, which can differ from the configured
+  one while the fallback is active. `Config.media_dir_configured()` still returns the configured target, and
+  `Config.internal_media_dir()` returns the internal storage.
+- The recording, the snapshots and the timelapse all write through the runtime target, so switching storage takes
+  effect immediately — no restart needed.
+
+### Fixed
+
+- **A USB drive that was pulled out could fill up the SD card.** The mount point stays behind as an empty
+  directory on the SD card, so a path-existence check happily reported "writable" and the recordings kept going
+  into the system partition. Long runs therefore ended with an unbootable device. Three things prevent this now:
+  the target must still be a mount point at the moment of writing, the recorder checks this before every single
+  event, and `StorageMonitor` re-checks it continuously. When the target is gone, recording is paused with a
+  visible warning instead of falling back to the SD card.
+- `check_target()` reported "no write permission" for the root filesystem, because the permission check ran
+  before the root-filesystem check. The root filesystem is now recognised first, so the message names the actual
+  problem.
+
+> Quality assurance: the storage layer was verified with an offline test suite covering mount detection, the
+> unplugged-drive case, `require_mount` on and off, the root-filesystem rejection, and the fallback behaviour. The
+> checks run against a substituted mount table, so they are deterministic and do not need physical hardware.
 
 ---
 

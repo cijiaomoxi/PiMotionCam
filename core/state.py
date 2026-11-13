@@ -26,6 +26,11 @@ class RuntimeState:
         "uptime": 0,
         "last_frame_at": None,
         "detection": {},
+        # 媒体存储状态（外部存储拔出会把 available 置 False）
+        "storage_available": True,
+        "storage_fallback": False,
+        "storage_path": "",
+        "storage_reason": "",
     }
 
     def __init__(self):
