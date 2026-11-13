@@ -870,6 +870,13 @@ class Camera:
                         "requires_restart": True,
                         "message": "相机尚未就绪，参数将在下次启动时生效"}
             w, h = self.config.get("camera", "resolution", default=[1280, 720])
+            # 裁剪（ScalerCrop）改了必须重建管线：缩放器的裁剪窗口
+            # 不是所有管线都能热改。其余控制项都可以 set_controls 热更新。
+            if imaging.libcamera_needs_reconfigure(norm, int(w), int(h), self._imaging):
+                self._imaging = norm
+                return {"ok": True, "backend": backend, "applied": False,
+                        "requires_restart": True,
+                        "message": "数字变焦改变了裁剪窗口，需要重启相机才能生效"}
             controls = self._filter_libcamera_controls(
                 self.cam, imaging.libcamera_controls(norm, int(w), int(h)))
             try:
