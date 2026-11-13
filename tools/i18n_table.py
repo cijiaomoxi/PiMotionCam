@@ -577,6 +577,10 @@ EXTRA = {
     "imaging.backendLibcamera": ("libcamera 通路", "libcamera path"),
     "imaging.backendV4l2": ("USB 通路", "USB path"),
     "imaging.notSupported": ("当前采集通路不支持这一项", "Not supported by the current capture path"),
+    "imaging.notApplied": (
+        "这组成像参数没能被采集进程接受，已退回默认参数启动（详情见服务日志）。",
+        "The capture process rejected these imaging settings and fell back to the "
+        "defaults (see the service log for details)."),
     "imaging.unsupported": ("有 {n} 项在当前采集通路下不支持", "{n} setting(s) are not supported by the current capture path"),
     "hint.imagingBackend": (
         "不同采集通路支持的参数不一样：ISP 硬件通路的成像参数在采集进程启动时生效，"

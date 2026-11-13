@@ -270,6 +270,7 @@
   "imaging.meterCustom": "自定义",
   "imaging.meterSpot": "点测光",
   "imaging.metering": "测光模式",
+  "imaging.notApplied": "这组成像参数没能被采集进程接受，已退回默认参数启动（详情见服务日志）。",
   "imaging.notSupported": "当前采集通路不支持这一项",
   "imaging.saturation": "饱和度",
   "imaging.sharpness": "锐度",

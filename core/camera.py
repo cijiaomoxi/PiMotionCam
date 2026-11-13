@@ -286,6 +286,8 @@ class RpiVidBackend:
         # 成像参数（亮度/对比度/白平衡…）在 rpicam-vid 上是**启动参数**，
         # 只能靠命令行带进去；改参数就意味着要重建这个进程。
         self.extra_args = list(extra_args or [])
+        # 成像参数是否真的被 ISP 接受了（启动失败时会退回"不带参数"）
+        self.imaging_applied = bool(self.extra_args)
         self.proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._err_thread: threading.Thread | None = None
@@ -305,6 +307,11 @@ class RpiVidBackend:
         从 picamera2 切过来时，libcamera 的 pipeline handler 释放是异步的，
         rpicam-vid 可能在几百毫秒内报 "Pipeline handler in use by another
         process"。这里带退避重试，把切换的时序问题吃掉。
+
+        **成像参数是启动参数**，万一某个值不被这版 rpicam-vid 接受，
+        整个采集进程就起不来了——那等于把相机彻底弄死。
+        所以这里再兜一层：带成像参数启动失败时，**去掉成像参数再试一次**，
+        宁可少几个参数也不能没有画面。
         """
         last = ""
         for attempt in range(retries):
@@ -318,6 +325,12 @@ class RpiVidBackend:
                     time.sleep(wait)
                     continue
             break
+        if self.extra_args:
+            self.extra_args = []
+            self.imaging_applied = False
+            self.log("rpicam-vid 带成像参数启动失败，去掉成像参数重试：%s" % last[-200:])
+            self.start(retries=2, wait=wait)
+            return
         raise RuntimeError(f"rpicam-vid 启动失败（code={self.proc.returncode if self.proc else '?'}）：{last[-300:]}")
 
     def _spawn(self):
@@ -795,12 +808,17 @@ class Camera:
         if backend == imaging.BACKEND_V4L2:
             dev = (self.camera_info or {}).get("device") or ""
             names = list(imaging.v4l2_controls(dev).keys())
+        # rpicam-vid 启动失败时会退回"不带成像参数"，这时要如实告诉界面
+        applied = True
+        if backend == imaging.BACKEND_RPICAM and self.rpivid is not None:
+            applied = bool(self.rpivid.imaging_applied)
         return {
             "values": dict(self._imaging),
             "backend": backend,
             "supported": imaging.supported_keys(backend, names),
             "requires_restart": imaging.requires_restart(backend),
             "unsupported": list(self._imaging_unsupported),
+            "applied": applied,
         }
 
     @staticmethod
@@ -972,7 +990,8 @@ class Camera:
                 self.camera_info.update({"backend": "rpicam", "format": "MJPEG",
                                          "resolution": [int(w), int(h)], "is_rpi": True,
                                          "rotation": rot, "flip": flip,
-                                         "imaging": dict(self._imaging)})
+                                         "imaging": dict(self._imaging),
+                                         "imaging_applied": bool(self.rpivid.imaging_applied)})
                 return None
 
         # ---- libcamera 通路 ----

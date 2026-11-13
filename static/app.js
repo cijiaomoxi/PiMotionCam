@@ -192,7 +192,7 @@ function renderState(s) {
   // 循环录像状态跟着 /api/state 一起刷新（每秒一次）
   if (s.loop) {
     LOOP = s.loop;
-    if ($('loop-tag')) renderLoop();
+    if ($('loop-tag')) renderLoop(false);
   }
 
   // OSD 叠加层
@@ -836,7 +836,11 @@ async function loadImaging() {
     };
     setText('imaging-backend', names[b] || b || '–');
     const uns = (IMAGING.unsupported || []).length;
-    setText('imaging-hint', uns ? t('imaging.unsupported', { n: uns }) : '');
+    if (IMAGING.applied === false) {
+      setText('imaging-hint', t('imaging.notApplied'));
+    } else {
+      setText('imaging-hint', uns ? t('imaging.unsupported', { n: uns }) : '');
+    }
   } catch (e) { /* 忽略 */ }
 }
 
@@ -875,7 +879,7 @@ async function resetImaging() {
  * ===================================================================*/
 let LOOP = null;
 
-function renderLoop() {
+function renderLoop(updateSliders) {
   if (!LOOP) return;
   const tag = $('loop-tag');
   if (tag) {
@@ -890,15 +894,19 @@ function renderLoop() {
     limit: bytes(LOOP.limit_bytes || 0)
   }));
   if ($('loop-enabled')) $('loop-enabled').checked = !!LOOP.enabled;
-  setRangeValue('loop-seg', 'v-loop-seg', LOOP.segment_seconds, (v) => v + ' s');
-  setRangeValue('loop-pct', 'v-loop-pct', LOOP.max_disk_percent, (v) => v + ' %');
-  setRangeValue('loop-q', 'v-loop-q', LOOP.quality, (v) => 'CRF ' + v);
+  // 滑块只在真正刷新时同步：每秒轮询 /api/state 也会调这里，
+  // 无条件回写会把用户正在拖的滑块弹回去。
+  if (updateSliders) {
+    setRangeValue('loop-seg', 'v-loop-seg', LOOP.segment_seconds, (v) => v + ' s');
+    setRangeValue('loop-pct', 'v-loop-pct', LOOP.max_disk_percent, (v) => v + ' %');
+    setRangeValue('loop-q', 'v-loop-q', LOOP.quality, (v) => 'CRF ' + v);
+  }
 }
 
 async function loadLoop() {
   try {
     LOOP = await GET('/api/loop');
-    renderLoop();
+    renderLoop(true);
   } catch (e) { /* 忽略 */ }
 }
 
@@ -911,7 +919,7 @@ async function saveLoop() {
   };
   try {
     LOOP = await POST('/api/loop', body);
-    renderLoop();
+    renderLoop(true);
     toast(t('toast.loopSaved'), 'ok');
   } catch (e) {
     toast(t('err.saveLoop') + e.message, 'err');

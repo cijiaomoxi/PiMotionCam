@@ -270,6 +270,7 @@
   "imaging.meterCustom": "Custom",
   "imaging.meterSpot": "Spot",
   "imaging.metering": "Metering",
+  "imaging.notApplied": "The capture process rejected these imaging settings and fell back to the defaults (see the service log for details).",
   "imaging.notSupported": "Not supported by the current capture path",
   "imaging.saturation": "Saturation",
   "imaging.sharpness": "Sharpness",

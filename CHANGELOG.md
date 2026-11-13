@@ -73,7 +73,7 @@ exposure compensation, ISO, shutter, white balance, digital zoom).
   the loop state machine (segment rotation, yielding to an event, resuming afterwards), the loop disk cap and the
   reclamation order. It runs on a Mac without numpy / Pillow (they are stubbed) and on the Pi with the real
   libraries.
-- 78 new strings in each language pack (493 in total).
+- 79 new strings in each language pack (494 in total).
 
 ### Notes
 
