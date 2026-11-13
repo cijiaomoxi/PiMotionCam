@@ -117,7 +117,7 @@ REQUIRED=(
   "core/locales/zh-CN.json" "core/locales/en-US.json"
   "templates/index.html" "templates/login.html"
   "static/app.js" "static/i18n.js" "static/style.css"
-  "docs/使用文档.md" "docs/USAGE.en.md"
+  "docs/使用文档.md" "docs/USAGE.en.md" "docs/上游功能对照.md"
   "README.md" "README.en.md" "CHANGELOG.md" "LICENSE"
   "install.sh" "build_native.sh" "krellcam.py" "deploy.sh"
 )
