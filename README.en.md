@@ -444,6 +444,13 @@ into fixed-length segments under `media/loop/`.
 The cap is a percentage of the **filesystem capacity**, matching the upstream `loop_diskusage_percent`, so the
 number stays meaningful after switching to a USB drive.
 
+Pausing the recorder (the "pause recording" switch in the web interface, or the internal command `record off`)
+also pauses loop recording — the same semantics as the upstream `pause` flag. The panel says "Recording paused"
+instead of looking like the switch did nothing, and it shows the **frame rate that is really used**: some USB
+cameras ignore the requested frame rate (10 fps configured, 30 fps delivered), the capture path throttles to the
+configured rate and the encoder timestamps the frames with the measured rate, so a "60 second" segment really is
+about 60 seconds long.
+
 ### Loop recording and event recording cannot run at the same time
 
 The Pi's H.264 hardware encoder lives on `/dev/video31` and **only one ffmpeg instance can use it at a time**;

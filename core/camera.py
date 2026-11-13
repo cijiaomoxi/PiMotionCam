@@ -1155,6 +1155,15 @@ class Camera:
         detect_w, detect_h = int(detect_w), int(detect_h)
         detect_fps = max(1, int(self.config.get("camera", "detect_fps", default=10)))
         detect_interval = 1.0 / detect_fps
+        # 录像帧率必须和配置一致。
+        #
+        # USB 相机经常**无视**请求帧率（配置 10fps，设备实给 30fps），
+        # 而编码器是按 `-framerate <配置值>` 给帧打时间戳的：多出来的帧
+        # 会被摊到更长的时间轴上，20 秒墙钟就录成 60 秒视频（3 倍慢放），
+        # 事件录像同样中招。所以这里在交给录像器之前按配置节流，多余的帧丢掉。
+        record_interval = 1.0 / max(
+            1, int(self.config.get("camera", "fps", default=10)))
+        last_record = None
         # 用"距上次检测的时间"而不是"下一个绝对时刻"来节流：
         # 后者会因为帧到达时刻的抖动而漂移，导致本该每帧检测的场合
         # 变成隔帧检测，侦测帧率凭空腰斩。
@@ -1239,8 +1248,18 @@ class Camera:
                         },
                     )
 
-            self.recorder.on_frame(jpeg, now, self._motion, self._bbox,
-                                   self._algo, self._region)
+            if last_record is None or now - last_record >= record_interval:
+                if last_record is None:
+                    last_record = now
+                else:
+                    # 累加而不是"last_record = now"：后者会把帧到达的抖动
+                    # 一点点攒成漂移，实测帧率会比配置值低 10~20%
+                    # （实测：配置 10fps，交付给录像器只有 8fps）。
+                    last_record += record_interval
+                    if now - last_record > record_interval * 4:
+                        last_record = now        # 落后太多就重新对齐
+                self.recorder.on_frame(jpeg, now, self._motion, self._bbox,
+                                       self._algo, self._region)
 
             self._frames += 1
             if self._frames >= 10:

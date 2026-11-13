@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 from pathlib import Path
@@ -507,6 +508,143 @@ def test_loop_stats() -> None:
           s["dir"].endswith("loop"), s["dir"])
 
 
+def test_video_fps() -> None:
+    section("录像帧率：编码器按实测帧率打时间戳")
+    tmp = Path(tempfile.mkdtemp(prefix="pkc-fps-"))
+    space = Space(30 * GB, 20 * GB)
+    cfg, st, rec = build(tmp / "f", {
+        "camera": {"fps": 10},
+        "loop": {"enabled": False, "segment_seconds": 60},
+    }, space)
+    space.bind(cfg.media_dir())
+
+    check("还没测量时退回配置帧率", rec._video_fps() == 10, str(rec._video_fps()))
+
+    # 设备无视请求帧率：配置 10fps，设备实给 30fps。
+    # 编码器若按 10fps 打时间戳，20 秒墙钟会录成 60 秒视频（3 倍慢放）。
+    now = time.time()
+    for i in range(75):                       # 2.5 秒 @30fps
+        rec.on_frame(b"x" * 100, now + i / 30.0)
+    check("实测帧率接近 30", abs(rec._rate_fps - 30) < 2, "measured=%s" % rec._rate_fps)
+    check("录像帧率取实测值", 28 <= rec._video_fps() <= 31, str(rec._video_fps()))
+
+    cmd, enc = rec._encoder_cmd(tmp / "x.mp4")
+    joined = " ".join(cmd)
+    check("ffmpeg 按实测帧率打时间戳",
+          ("-framerate %d" % rec._video_fps()) in joined, joined)
+
+    # 设备比要求的还慢时也要用实测值，否则视频会快放
+    rec._rate_fps = 7.4
+    check("设备更慢时用实测帧率", rec._video_fps() == 7, str(rec._video_fps()))
+    rec._rate_fps = 999.0
+    check("实测帧率被限制在合理上限", rec._video_fps() == 120, str(rec._video_fps()))
+
+
+def test_loop_reports_paused() -> None:
+    section("循环录像：如实上报暂停状态与实际帧率")
+    tmp = Path(tempfile.mkdtemp(prefix="pkc-looppause-"))
+    space = Space(20 * GB, 15 * GB)
+    cfg, st, rec = build(tmp / "g", {
+        "loop": {"enabled": True, "segment_seconds": 30},
+    }, space)
+    space.bind(cfg.media_dir())
+
+    rec.on_frame(b"x" * 100, time.time())
+    s = rec.loop_stats()
+    check("统计含 paused 字段", "paused" in s, str(s))
+    check("未暂停时 paused 为 False", s["paused"] is False, str(s))
+    check("统计含实际帧率", s["fps"] > 0, str(s))
+
+    # 录像被暂停 → 循环录像不再开段（上游 pause 语义同样如此）
+    cfg.set({"record": {"paused": True}})
+    rec.on_frame(b"x" * 100, time.time() + 1)
+    s = rec.loop_stats()
+    check("暂停后 paused 为 True", s["paused"] is True, str(s))
+    check("暂停后循环录像不再录制", s["recording"] is False, str(s))
+
+
+def test_camera_record_throttle() -> None:
+    section("采集：录像按配置帧率节流")
+    from core.camera import Camera
+
+    class FakeBackend:
+        """假装是一个无视请求帧率的 USB 相机：一直给 30fps。"""
+
+        def __init__(self, n, interval):
+            self.n = n
+            self.interval = interval
+
+        def read(self, timeout=None):
+            if self.n <= 0:
+                raise RuntimeError("no more frames")
+            self.n -= 1
+            time.sleep(self.interval)
+            return b"raw"
+
+    class FakeAdapter:
+        def to_jpeg(self, frame):
+            return b"jpeg"
+
+        def to_gray(self, frame, w, h):
+            return None                 # 不做检测，省掉 numpy 依赖
+
+    class FakeRecorder:
+        def __init__(self):
+            self.frames = 0
+
+        def on_frame(self, jpeg, now, motion=False, bbox=None,
+                     algorithm=None, region=None):
+            self.frames += 1
+
+    class FakeDetector:
+        detect_fps = 10.0
+
+        def process(self, gray):
+            raise AssertionError("本测试不做检测")
+
+    class FakeCamConfig:
+        def get(self, section, key, default=None):
+            table = {
+                "camera": {"fps": 10, "detect_fps": 10,
+                           "detect_resolution": [320, 180],
+                           "stall_timeout": 8.0, "min_fps": 0.0},
+            }
+            return table.get(section, {}).get(key, default)
+
+    cam = Camera.__new__(Camera)
+    cam.config = FakeCamConfig()
+    cam.state = FakeState()
+    cam.recorder = FakeRecorder()
+    cam.adapter = FakeAdapter()
+    cam.detector = FakeDetector()
+    cam.v4l2 = FakeBackend(60, 1 / 30.0)      # 设备给 30fps
+    cam.rpivid = None
+    cam.cam = None
+    cam._software_transform = False
+    cam._stop = threading.Event()
+    cam._lock = threading.Lock()
+    cam._latest = None
+    cam._seq = 0
+    cam._frames = 0
+    cam._fps_mark = time.time()
+    cam._motion = False
+    cam._bbox = None
+    cam._algo = None
+    cam._region = None
+    cam._last_tick = None
+    cam._jpeg_ms = 0.0
+
+    try:
+        cam._capture_loop()
+    except RuntimeError:
+        pass
+    delivered = cam.recorder.frames
+    check("设备 30fps 时只按配置的 10fps 交付给录像器",
+          12 <= delivered <= 26, "2 秒内交付了 %d 帧" % delivered)
+    check("预览仍然是设备的原始帧率（不被节流影响）",
+          cam._seq >= 50, "预览更新了 %d 次" % cam._seq)
+
+
 def main() -> int:
     print("pikrellcam-lite v2.7.0 离线单元测试")
     test_normalize()
@@ -519,6 +657,9 @@ def main() -> int:
     test_loop_disk_guard()
     test_global_guard_order()
     test_loop_stats()
+    test_video_fps()
+    test_loop_reports_paused()
+    test_camera_record_throttle()
 
     print("\n" + "=" * 52)
     print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))

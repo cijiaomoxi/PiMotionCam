@@ -676,6 +676,16 @@ curl -X POST http://pi.local:8080/api/loop -H 'Content-Type: application/json' \
 Internal commands (usable from scheduled commands, the FIFO and `at-commands`): `loop on`, `loop off`,
 `loop status`.
 
+> **Pausing the recorder also pauses loop recording.** The "pause recording" switch in the web interface and the
+> internal command `record off` stop *all* recording, loop recording included — the same semantics as the upstream
+> `pause` flag. The panel says "Recording paused" next to the state label instead of silently looking like the
+> switch did nothing.
+>
+> The panel also shows the **frame rate that is really used**. It is not necessarily the configured `camera.fps`:
+> some USB cameras ignore the requested frame rate (10 fps configured, 30 fps delivered). The capture path then
+> throttles to the configured rate and the encoder timestamps the frames with the *measured* rate, so a "60 second"
+> segment really is about 60 seconds long instead of 180.
+
 #### Loop recording and event recording never run at the same time
 
 The Pi's H.264 hardware encoder lives on `/dev/video31` and **only one ffmpeg instance can use it at a time**;
@@ -912,7 +922,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `camera.resolution` | `[1280, 720]` | Main stream capture resolution (width, height). Pi 3B/Zero are automatically set to `[640, 480]`. |
-| `camera.fps` | `10` | Capture frame rate, 1–30. |
+| `camera.fps` | `10` | Capture frame rate, 1–30. Recordings are written at this rate as well: a camera that ignores the requested rate is throttled in the capture path and the encoder timestamps the frames with the measured rate, so the footage keeps the length of real time. |
 | `camera.buffer_count` | `6` | libcamera buffer count, minimum 3. |
 | `camera.rotation` | `0` | Rotation: `0` / `90` / `180` / `270`. 0 and 180 are free from the ISP; 90 and 270 automatically switch to software rotation over the RGB888 path. Not supported on the USB path. |
 | `camera.flip` | `none` | Flip: `none` / `horizontal` / `vertical` / `both`. Not supported on the USB path. |
@@ -1080,7 +1090,7 @@ There are **58 HTTP endpoints** in total: 53 `/api/*` endpoints plus 5 page and 
 | GET | `/api/release` | `{version, release, current, releases, root}` | The running version and all retained historical versions. |
 | GET | `/api/system` | status object | Model, system version, Python version, directories, hostname, uptime. |
 | GET | `/api/i18n` | `{language, available, strings}` | Current language, all available languages, and the string dictionary. |
-| GET | `/api/loop` | state object | Loop recording state (`enabled`/`recording`/`yielded`/`segments`/`bytes`/`limit_bytes`/`dir`). |
+| GET | `/api/loop` | state object | Loop recording state (`enabled`/`recording`/`yielded`/`paused`/`segments`/`bytes`/`limit_bytes`/`dir`/`fps`). |
 | GET | `/api/imaging` | `{values, schema, backend, supported, requires_restart}` | Current imaging values, the parameter schema, the active capture path and what it supports. |
 | GET | `/api/storage` | `{ok, storage}` | The detected storage devices and the current storage state. |
 | GET | `/snapshot.jpg` | JPEG | The most recent frame as a still image. |

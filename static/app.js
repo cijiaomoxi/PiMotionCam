@@ -881,18 +881,24 @@ let LOOP = null;
 
 function renderLoop(updateSliders) {
   if (!LOOP) return;
+  // 录像被暂停时循环录像也不会开段（与上游 pause 语义一致），
+  // 面板必须如实说明，否则用户只会觉得开关没生效。
+  const paused = !!LOOP.paused;
   const tag = $('loop-tag');
   if (tag) {
     tag.textContent = LOOP.enabled
-      ? (LOOP.recording ? t('loop.recording') : t('loop.enabled'))
+      ? (LOOP.recording ? t('loop.recording') : (paused ? t('loop.paused') : t('loop.enabled')))
       : t('loop.disabled');
-    tag.classList.toggle('warn', !LOOP.enabled);
+    tag.classList.toggle('warn', !LOOP.enabled || (paused && !LOOP.recording));
   }
-  setText('loop-detail', t('loop.detail', {
+  let detail = t('loop.detail', {
     n: LOOP.segments || 0,
     size: bytes(LOOP.bytes || 0),
     limit: bytes(LOOP.limit_bytes || 0)
-  }));
+  });
+  if (LOOP.fps) detail += ' · ' + t('loop.fps', { fps: LOOP.fps });
+  if (LOOP.enabled && paused && !LOOP.recording) detail += ' · ' + t('loop.pausedHint');
+  setText('loop-detail', detail);
   if ($('loop-enabled')) $('loop-enabled').checked = !!LOOP.enabled;
   // 滑块只在真正刷新时同步：每秒轮询 /api/state 也会调这里，
   // 无条件回写会把用户正在拖的滑块弹回去。

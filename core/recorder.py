@@ -120,6 +120,13 @@ class Recorder:
         self._loop_closed = 0
         self._loop_bytes = 0
         self._loop_scan_at = 0.0
+        # 实测"真正送进编码器"的帧率。
+        #
+        # 设备可能无视配置的帧率请求（USB 相机常见：配置 10fps 实给 30fps），
+        # 编码器必须按实测值给帧打时间戳，否则视频时长会和真实时间对不上。
+        self._rate_frames = 0
+        self._rate_mark = time.time()
+        self._rate_fps = 0.0
         # 事件索引固定放在内置存储：外部存储拔出/换盘时索引不会丢
         self._events_file = config.internal_media_dir() / "events.json"
         self._legacy_events_file = config.media_sub("events.json")
@@ -189,9 +196,20 @@ class Recorder:
         self.state.set("error", f"已清理 {len(broken)} 个未正常收尾的录像文件")
 
     # ------------------------------------------------------------------
+    def _video_fps(self) -> int:
+        """录像用的真实帧率。
+
+        优先用实测值：设备可能无视配置的帧率请求（USB 相机常见），
+        按配置值打时间戳会让视频时长和真实时间对不上（慢放/快放）。
+        还没测到值时（例如刚启动）退回配置值。
+        """
+        if self._rate_fps > 0:
+            return max(1, min(120, int(round(self._rate_fps))))
+        return max(1, int(self.config.get("camera", "fps", default=10)))
+
     def _encoder_cmd(self, out_path: Path, force: str | None = None,
                      quality: int | None = None) -> tuple[list[str], str]:
-        fps = max(1, int(self.config.get("camera", "fps", default=10)))
+        fps = self._video_fps()
         if quality is None:
             quality = int(self.config.get("record", "quality", default=23))
         else:
@@ -226,6 +244,14 @@ class Recorder:
     def on_frame(self, frame: bytes, now: float, motion: bool = False, bbox=None,
                  algorithm: str | None = None, region: str | None = None) -> None:
         """采集线程每帧调用。"""
+        # 实测帧率：编码器按这个值给帧打时间戳。
+        self._rate_frames += 1
+        el = now - self._rate_mark
+        if el >= 2.0:
+            # 2 秒窗口：比 1 秒稳，避免抖动把编码器的时间轴带偏。
+            self._rate_fps = self._rate_frames / el
+            self._rate_frames = 0
+            self._rate_mark = now
         if self.config.get("record", "paused", default=False):
             # 暂停录像时，若还有没收尾的事件要先正常收尾：否则 ffmpeg 收不到
             # EOF 也不会退出，会一直挂着，白占着硬件编码器和管道。
@@ -243,7 +269,7 @@ class Recorder:
             if not self._in_event:
                 self._buffer.append((now, frame))
                 pre = float(self.config.get("record", "pre_seconds", default=5))
-                fps = max(1, int(self.config.get("camera", "fps", default=10)))
+                fps = self._video_fps()
                 maxlen = max(1, int(pre * fps))
                 while len(self._buffer) > maxlen:
                     self._buffer.popleft()
@@ -857,6 +883,11 @@ class Recorder:
             "enabled": bool(self.config.get("loop", "enabled", default=False)),
             "recording": bool(active),
             "yielded": bool(yielded),
+            # 录像被暂停时，循环录像也不会开段（与上游 pause 语义一致）。
+            # 界面上要如实说明，否则用户会以为开关没生效。
+            "paused": bool(self.config.get("record", "paused", default=False)),
+            # 实际用于录像的帧率（实测值，可能与配置值不同）
+            "fps": self._video_fps(),
             # 段数 = 已收尾的段 + 正在录的这一段
             "segments": seg_count,
             "bytes": int(used),

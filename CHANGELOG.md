@@ -69,14 +69,27 @@ exposure compensation, ISO, shutter, white balance, digital zoom).
 - An "成像参数 / Imaging" panel on the Detection tab. The controls are **generated from the schema** returned by
   the backend, so adding a parameter only means editing `core/imaging.py` — no template or JavaScript changes.
   Parameters the current capture path cannot do are greyed out and disabled.
-- `tools/test_v270.py` — 88 offline unit tests covering the parameter normalisation, the three backend mappings,
+- `tools/test_v270.py` — 101 offline unit tests covering the parameter normalisation, the three backend mappings,
   the loop state machine (segment rotation, yielding to an event, resuming afterwards), the loop disk cap and the
   reclamation order. It runs on a Mac without numpy / Pillow (they are stubbed) and on the Pi with the real
   libraries.
 - `tools/test_web_v270.py` — 37 integration tests for the two new endpoints, driven through the Flask test
   client: request handling, value clamping, persistence, the camera restart on the rpicam path, and the new
   `loop` section of `/api/state`. It needs Flask (skipped with a hint when it is missing) and needs no camera.
-- 79 new strings in each language pack (494 in total).
+- 82 new strings in each language pack (497 in total).
+
+### Fixed
+
+- **Recorded videos are now as long as they actually are.** The capture thread handed every frame the camera
+  produced to the recorder, while the encoder timestamps the frames with the *configured* frame rate. A camera
+  that ignores the requested frame rate (10 fps configured, 30 fps delivered — common for USB cameras) therefore
+  produced a 20-second recording that claims to be 60 seconds long: a 3× slow motion. The capture path now
+  throttles the frames handed to the recorder to the configured frame rate (the preview keeps the camera's native
+  rate), and the encoder additionally uses the *measured* frame rate, so a camera that is slower than requested
+  no longer produces fast-forward footage either. Event recordings were affected by the same bug.
+- The loop panel now tells the real reason when nothing is being recorded: pausing the recorder pauses loop
+  recording as well (the same semantics as the upstream `pause` flag), and the panel says so instead of silently
+  showing "enabled". It also shows the frame rate that is really used for recording.
 
 ### Notes
 

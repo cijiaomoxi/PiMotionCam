@@ -621,6 +621,10 @@ EXTRA = {
     "loop.recording": ("录制中", "Recording"),
     "loop.detail": ("{n} 段 · 占用 {size} / 上限 {limit}",
                     "{n} segment(s) · {size} used / {limit} cap"),
+    "loop.paused": ("录像已暂停", "Recording paused"),
+    "loop.pausedHint": ("录像已暂停，循环录像不会开始",
+                        "Recording is paused, so loop recording will not start"),
+    "loop.fps": ("实际 {fps} fps", "actual {fps} fps"),
     "hint.loopYield": (
         "循环录像与事件录像共用同一个硬件编码器，不能同时录："
         "检测到移动时循环录像会让位给事件录像，事件结束后自动恢复。"
