@@ -121,7 +121,7 @@ REQUIRED=(
   "docs/使用文档.md" "docs/USAGE.en.md" "docs/上游功能对照.md"
   "README.md" "README.en.md" "CHANGELOG.md" "LICENSE"
   "install.sh" "build_native.sh" "krellcam.py" "deploy.sh"
-  "tools/test_v270.py"
+  "tools/test_v270.py" "tools/test_web_v270.py"
 )
 MISSING=0
 for rel in "${REQUIRED[@]}"; do

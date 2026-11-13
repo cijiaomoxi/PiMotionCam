@@ -73,6 +73,9 @@ exposure compensation, ISO, shutter, white balance, digital zoom).
   the loop state machine (segment rotation, yielding to an event, resuming afterwards), the loop disk cap and the
   reclamation order. It runs on a Mac without numpy / Pillow (they are stubbed) and on the Pi with the real
   libraries.
+- `tools/test_web_v270.py` — 37 integration tests for the two new endpoints, driven through the Flask test
+  client: request handling, value clamping, persistence, the camera restart on the rpicam path, and the new
+  `loop` section of `/api/state`. It needs Flask (skipped with a hint when it is missing) and needs no camera.
 - 79 new strings in each language pack (494 in total).
 
 ### Notes
