@@ -1,0 +1,94 @@
+{
+  "camera": {
+    "resolution": [1280, 720],
+    "fps": 10,
+    "buffer_count": 6,
+    "rotation": 0,
+    "flip": "none",
+    "jpeg_quality": 72,
+    "detect_resolution": [320, 180],
+    "detect_fps": 10,
+    "exposure": -1
+  },
+  "motion": {
+    "enabled": true,
+    "startup_motion": true,
+    "algorithms": {
+      "far": {
+        "enabled": true,
+        "magnitude_limit": 12,
+        "count_limit": 0.006,
+        "consecutive_frames": 2,
+        "noise_filter": 2
+      },
+      "near": {
+        "enabled": true,
+        "magnitude_limit": 28,
+        "count_limit": 0.02,
+        "consecutive_frames": 2,
+        "noise_filter": 3
+      }
+    },
+    "regions": [
+      {
+        "name": "全画面",
+        "x": 0.0,
+        "y": 0.0,
+        "w": 1.0,
+        "h": 1.0,
+        "enabled": true
+      }
+    ],
+    "region_presets": {}
+  },
+  "record": {
+    "pre_seconds": 5,
+    "post_seconds": 8,
+    "event_gap_seconds": 10,
+    "max_event_seconds": 120,
+    "max_disk_gb": 8,
+    "encoder": "auto",
+    "quality": 23,
+    "paused": false
+  },
+  "timelapse": {
+    "enabled": false,
+    "period": 30,
+    "hold": false
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "password_hash": "",
+    "osd": true,
+    "show_vectors": false
+  },
+  "media": {
+    "dir": "",
+    "archive_target": ""
+  },
+  "servo": {
+    "enabled": false,
+    "backend": "auto",
+    "pan_pin": 18,
+    "tilt_pin": 17,
+    "pan_min": 0,
+    "pan_max": 180,
+    "tilt_min": 0,
+    "tilt_max": 180,
+    "smooth_ms": 0,
+    "positions": [
+      { "name": "中", "pan": 90, "tilt": 90 },
+      { "name": "左", "pan": 30, "tilt": 90 },
+      { "name": "右", "pan": 150, "tilt": 90 }
+    ]
+  },
+  "hooks": {
+    "on_motion_begin": "",
+    "on_motion_end": "",
+    "on_motion_preview_save": "",
+    "on_timelapse_end": ""
+  },
+  "schedules": [],
+  "presets": {}
+}

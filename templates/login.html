@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="app.titleLogin">pikrellcam-lite · 登录</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; }
+  .login {
+    width: min(360px, 92vw);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 26px 24px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .45);
+  }
+  .login .brand { justify-content: center; margin-bottom: 18px; }
+  .login .brand > div { text-align: center; }
+  .login h1 { text-align: center; font-size: 16px; }
+  .login p.sub2 { text-align: center; color: var(--muted); font-size: 12px; margin: 6px 0 20px; }
+  .login input { width: 100%; padding: 9px 11px; font-size: 13px; }
+  .login button { width: 100%; margin-top: 14px; padding: 9px 12px; font-size: 13px; }
+  .login .err { color: var(--bad); font-size: 12px; min-height: 17px; margin-top: 8px; text-align: center; }
+  .login #lang-switch { display: flex; justify-content: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<div class="login">
+  <div class="brand">
+    <span class="logo">PKC</span>
+    <div>
+      <h1>pikrellcam-lite</h1>
+      <small data-i18n="app.console">移动侦测录像控制台</small>
+    </div>
+  </div>
+  <p class="sub2" data-i18n="login.prompt">请输入访问密码以继续</p>
+  <input type="password" id="pwd" placeholder="访问密码" data-i18n-placeholder="login.password" autocomplete="current-password" autofocus>
+  <div class="err" id="err"></div>
+  <button id="submit" class="primary" data-i18n="btn.login">登录</button>
+  <div id="lang-switch"></div>
+</div>
+
+<script>window.PKC_I18N = {{ i18n | tojson }};</script>
+<script src="{{ url_for('static', filename='i18n.js') }}"></script>
+<script>
+(function () {
+  // API 基址可被覆盖（测试用），默认同源
+  var API = (window.PKC_API_BASE || '').replace(/\/$/, '');
+  var $ = function (id) { return document.getElementById(id); };
+
+  // 先把静态文案换成当前语言，再挂语言切换器
+  applyI18n();
+  mountLangSwitch();
+
+  function fail(msg) { $('err').textContent = msg || t('err.loginFailed'); }
+
+  // 已登录或未启用密码时直接回控制台
+  fetch(API + '/api/auth', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.required || d.authenticated) { location.replace('/'); }
+    })
+    .catch(function () { /* 服务不可达时留在登录页 */ });
+
+  function submit() {
+    var pwd = $('pwd').value;
+    $('err').textContent = '';
+    fetch(API + '/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwd })
+    })
+      .then(function (r) {
+        return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+      })
+      .then(function (res) {
+        if (res.ok && res.data && res.data.authenticated) {
+          location.replace('/');
+        } else {
+          fail((res.data && res.data.error) || t('err.badPassword'));
+        }
+      })
+      .catch(function () { fail(t('err.cannotConnect')); });
+  }
+
+  $('submit').addEventListener('click', submit);
+  $('pwd').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { submit(); }
+  });
+})();
+</script>
+</body>
+</html>

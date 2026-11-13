@@ -1,0 +1,26 @@
+# 打包产物与发布文件（由 package.sh 生成）
+/dist/
+
+# 本地版本快照工作区（打包时已排除）
+/versions/
+
+# 运行时数据
+/media/
+/logs/
+/venv/
+/config.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 编译产物（build_native.sh 生成）
+*.so
+*.o
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,44 @@
+MIT License
+
+Copyright (c) 2026 pikrellcam-lite contributors
+
+--------------------------------------------------------------------------
+致谢与来源说明 / Acknowledgements and Provenance
+--------------------------------------------------------------------------
+
+本项目（pikrellcam-lite，GitHub 仓库 pikrellcam_update）是独立实现的
+移动侦测录像服务。其功能设计、交互流程与配置语义参考了：
+
+    PiKrellCam — Copyright (c) Bill Wilson
+    https://github.com/billw2/pikrellcam  （上游以 GPL-3.0 发布）
+
+本仓库不包含 PiKrellCam 的源代码，亦非其 fork；采集、运动检测与网页界面
+均基于 libcamera / picamera2 栈重新实现。文中引用 PiKrellCam 的命令名
+（如 tl_start、on_motion_begin）仅用于说明配置与命令的兼容关系。
+
+完整致谢与免责说明见 README.md / README.en.md 的「致谢与参考」章节。
+
+This project is an independent implementation. It references the feature
+design of PiKrellCam (https://github.com/billw2/pikrellcam), Copyright (c)
+Bill Wilson, licensed under GPL-3.0. No PiKrellCam source code is included
+in this repository, and this repository is not a fork of it.
+
+--------------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

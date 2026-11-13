@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="app.title">pikrellcam-lite · 移动侦测录像</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<!-- ============================ 顶栏：始终可见的关键指标 ============================ -->
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">PKC</span>
+    <div>
+      <h1>pikrellcam-lite</h1>
+      <small><span data-i18n="app.subtitle">CSI / USB 移动侦测录像 · v</span><span id="ver">–</span></small>
+    </div>
+  </div>
+
+  <div id="status-pill" class="pill warn" data-i18n="status.connecting">连接中…</div>
+
+  <div class="metrics">
+    <div class="metric"><label>FPS</label><b id="m-fps">–</b></div>
+    <div class="metric"><label data-i18n="metric.detectFps">侦测 FPS</label><b id="m-dfps">–</b></div>
+    <div class="metric"><label data-i18n="metric.events">事件</label><b id="m-events">–</b></div>
+    <div class="metric"><label data-i18n="metric.disk">磁盘</label><b id="m-disk">–</b></div>
+    <div class="metric"><label data-i18n="metric.preset">预设</label><b id="m-preset">–</b></div>
+  </div>
+
+  <div class="topactions">
+    <div id="lang-switch"></div>
+    <button id="btn-logout" class="ghost hidden" data-i18n="btn.logout">退出登录</button>
+    <button id="btn-refresh" class="ghost" data-i18n="btn.refresh">刷新</button>
+  </div>
+</header>
+
+<!-- ============================ 标签页 ============================ -->
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="preview" data-i18n="nav.preview">实时预览</button>
+  <button class="tab" data-tab="detect" data-i18n="nav.detect">侦测调参</button>
+  <button class="tab" data-tab="media" data-i18n="nav.media">媒体</button>
+  <button class="tab" data-tab="schedule" data-i18n="nav.schedule">定时命令</button>
+  <button class="tab" data-tab="servo" data-i18n="nav.servo">舵机</button>
+  <button class="tab" data-tab="system" data-i18n="nav.system">系统</button>
+</nav>
+
+<main>
+
+<!-- ============================ 实时预览 ============================ -->
+<section class="tabpage active" id="page-preview">
+  <div class="grid2 wide-left">
+
+    <div class="panel">
+      <h2><span data-i18n="panel.liveView">实时画面</span> <span class="tag" id="feed-tag">MJPEG</span>
+        <span class="spacer"></span>
+        <select id="preview-cam-select" class="minisel" title="选择摄像头" data-i18n-title="cam.pickTitle">
+          <option value="auto" data-i18n="cam.auto">自动选择</option>
+        </select>
+        <select id="preview-fmt-select" class="minisel" title="选择采集通路" data-i18n-title="cam.pickPath">
+          <option value="auto" data-i18n="cam.autoPath">自动通路</option>
+          <option value="MJPEG" data-i18n="cam.pathMjpeg">ISP 硬件 JPEG</option>
+          <option value="RGB888" data-i18n="cam.pathRgb">原始 RGB</option>
+        </select>
+        <button id="btn-preview-cam" class="sm" title="切换到所选摄像头" data-i18n-title="cam.switchTo" data-i18n="btn.switch">切换</button>
+        <span class="hint" id="feed-hint" data-i18n="hint.dragRegions">拖拽画面可绘制检测区域</span>
+      </h2>
+
+      <div class="camwrap" id="camwrap">
+        <img id="cam" alt="实时预览" data-i18n-alt="nav.preview">
+        <!-- OSD 与区域框都是绝对定位的 HTML 叠加层，文字不烧进图像 -->
+        <div class="overlay" id="overlay">
+          <div class="drawsurface" id="drawsurface"></div>
+          <div class="regions" id="regions"></div>
+
+          <div class="osd osd-tl">
+            <div class="osd-line big" id="osd-time">--:--:--</div>
+            <div class="osd-line"><span class="badge" id="osd-badge" data-i18n="state.still">静止</span></div>
+          </div>
+          <div class="osd osd-tr">
+            <div class="osd-line">FPS <b id="osd-fps">0</b></div>
+            <div class="osd-line"><span data-i18n="osd.detect">侦测</span> <b id="osd-dfps">0</b></div>
+            <div class="osd-line"><span data-i18n="metric.events">事件</span> <b id="osd-events">0</b></div>
+            <div class="osd-line"><span data-i18n="metric.disk">磁盘</span> <b id="osd-disk">0</b></div>
+          </div>
+          <div class="osd osd-bl">
+            <div class="osd-line"><span data-i18n="event.algorithm">算法</span> <b id="osd-algo">–</b> <span data-i18n="event.region">· 区域</span> <b id="osd-region">–</b></div>
+            <div class="osd-line"><span data-i18n="osd.change">变化</span> <b id="osd-ratio">0.00%</b></div>
+            <div class="osd-line"><span data-i18n="metric.preset">预设</span> <b id="osd-preset">–</b></div>
+          </div>
+          <div class="osd osd-br">
+            <div class="osd-line" id="osd-bbox">–</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="btn-motion" class="primary" data-i18n="btn.pauseDetect">暂停侦测</button>
+        <button id="btn-recpause" data-i18n="btn.pauseRecord">暂停录像</button>
+        <button id="btn-still" data-i18n="btn.snapshot">抓拍一张</button>
+        <button id="btn-restart" data-i18n="btn.restartService">重启服务</button>
+        <span class="hint" id="preview-hint"></span>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2><span data-i18n="panel.regions">运动区域</span> <span class="tag" id="region-count">0</span>
+          <span class="spacer"></span>
+          <button id="btn-regions-save" class="sm primary" data-i18n="btn.saveRegions">保存区域</button>
+        </h2>
+        <div class="rlist" id="region-list"></div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" id="new-region-name" placeholder="新区域名称" data-i18n-placeholder="region.newName" style="flex:1;min-width:120px">
+          <button id="btn-region-add" class="sm" data-i18n="btn.addFullRegion">新增整屏区域</button>
+        </div>
+        <p class="hint" data-i18n="hint.drawRegionsLong">在左侧画面上按住鼠标拖动即可绘制矩形；在右侧列表中点击某个区域即选中它，选中后可拖动框体移动、右下角小块缩放，双击框体可重命名。</p>
+      </div>
+
+      <div class="panel">
+        <h2 data-i18n="panel.regionPresets">区域预设</h2>
+        <div class="row">
+          <input type="text" id="rp-name" placeholder="预设名称" data-i18n-placeholder="preset.name" style="flex:1;min-width:110px">
+          <button id="btn-rp-save" class="sm" data-i18n="btn.saveAsRegionPreset">保存当前为预设</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <select id="rp-select" style="flex:1;min-width:110px"></select>
+          <button id="btn-rp-load" class="sm" data-i18n="btn.load">载入</button>
+        </div>
+        <div class="rlist" id="rp-list" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ 侦测调参 ============================ -->
+<section class="tabpage" id="page-detect">
+  <div class="panel">
+    <h2><span data-i18n="algo.dualTitle">双算法灵敏度</span> <span class="tag" data-i18n="algo.parallel">far / near 并行</span>
+      <span class="spacer"></span>
+      <span class="hint" id="algo-hint"></span>
+    </h2>
+    <div class="cols" id="algo-box"></div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <h2 data-i18n="panel.detectToggle">侦测开关</h2>
+      <div class="row" style="margin-bottom:10px">
+        <label class="check"><input type="checkbox" id="cfg-motion-enabled"> <span data-i18n="label.motionEnabled">启用移动侦测</span></label>
+        <label class="check"><input type="checkbox" id="cfg-startup-motion"> <span data-i18n="label.startupMotion">启动即开始侦测</span></label>
+      </div>
+      <p class="hint" data-i18n="algo.intro">far 算法面向远处小而慢的目标，near 算法面向近处大目标；两者可同时开启，也可只用一个。</p>
+    </div>
+
+    <div class="panel">
+      <h2 data-i18n="panel.recordParams">录像参数</h2>
+      <div class="cols">
+        <label class="field"><span><span data-i18n="label.preSecondsFull">触发前预录(秒)</span><b class="val" id="v-rec-pre"></b></span>
+          <input type="range" id="rec-pre" min="0" max="30" step="1"></label>
+        <label class="field"><span><span data-i18n="label.postSecondsFull">触发后补录(秒)</span><b class="val" id="v-rec-post"></b></span>
+          <input type="range" id="rec-post" min="0" max="60" step="1"></label>
+        <label class="field"><span><span data-i18n="label.eventGap">事件间隔(秒)</span><b class="val" id="v-rec-gap"></b></span>
+          <input type="range" id="rec-gap" min="0" max="120" step="1"></label>
+        <label class="field"><span><span data-i18n="label.maxEvent">单事件最长(秒)</span><b class="val" id="v-rec-maxev"></b></span>
+          <input type="range" id="rec-maxev" min="5" max="600" step="5"></label>
+        <label class="field"><span><span data-i18n="label.maxDisk">磁盘上限(GB)</span><b class="val" id="v-rec-maxdisk"></b></span>
+          <input type="range" id="rec-maxdisk" min="1" max="128" step="1"></label>
+        <label class="field"><span><span data-i18n="label.crf">编码质量 CRF</span><b class="val" id="v-rec-quality"></b></span>
+          <input type="range" id="rec-quality" min="10" max="40" step="1"></label>
+        <label class="field"><span data-i18n="label.encoder">编码器</span>
+          <select id="rec-encoder">
+            <option value="auto">auto</option>
+            <option value="h264_v4l2m2m">h264_v4l2m2m</option>
+            <option value="libx264">libx264</option>
+          </select></label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2><span data-i18n="panel.cameraParams">相机参数</span> <span class="hint" data-i18n="hint.restartOnChange">分辨率/帧率变更会重启采集</span></h2>
+      <div class="cols">
+        <label class="field"><span data-i18n="label.mainResolution">主码流分辨率</span>
+          <select id="cam-res"></select></label>
+        <label class="field"><span><span data-i18n="label.fps">帧率</span><b class="val" id="v-cam-fps"></b></span>
+          <input type="range" id="cam-fps" min="1" max="30" step="1"></label>
+        <label class="field"><span><span data-i18n="label.rotation">旋转</span><b class="val" id="v-cam-rot"></b></span>
+          <input type="range" id="cam-rot" min="0" max="270" step="90"></label>
+        <label class="field"><span data-i18n="label.flip">镜像</span>
+          <select id="cam-flip">
+            <option value="none">none</option>
+            <option value="horizontal">horizontal</option>
+            <option value="vertical">vertical</option>
+            <option value="both">both</option>
+          </select></label>
+        <label class="field"><span data-i18n="label.detectResolution">侦测分辨率</span>
+          <select id="cam-detres"></select></label>
+        <label class="field"><span><span data-i18n="label.detectFps">侦测帧率</span><b class="val" id="v-cam-detfps"></b></span>
+          <input type="range" id="cam-detfps" min="1" max="30" step="1"></label>
+        <label class="field"><span><span data-i18n="label.exposure">曝光</span><b class="val" id="v-cam-exp"></b></span>
+          <input type="range" id="cam-exp" min="-1" max="200" step="1"></label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 data-i18n="panel.timelapseParams">延时摄影参数</h2>
+      <div class="cols">
+        <label class="check"><input type="checkbox" id="cfg-tl-enabled"> <span data-i18n="label.tlEnabled">启用延时摄影</span></label>
+        <label class="field"><span><span data-i18n="label.tlPeriod">默认周期(秒)</span><b class="val" id="v-tl-period"></b></span>
+          <input type="range" id="tl-period" min="1" max="600" step="1"></label>
+        <label class="check"><input type="checkbox" id="cfg-tl-hold"> <span data-i18n="label.tlHold">启动后立即保持</span></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-cfg-save" class="primary" data-i18n="btn.saveConfig">保存配置</button>
+        <button id="btn-cfg-reset" class="danger" data-i18n="btn.resetConfig">恢复默认配置</button>
+        <span class="hint" id="cfg-hint"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2><span data-i18n="panel.configPresets">配置预设</span> <span class="tag" id="preset-count">0</span></h2>
+    <div class="row">
+      <input type="text" id="preset-name" placeholder="新预设名称" data-i18n-placeholder="preset.newName" style="flex:1;min-width:140px">
+      <button id="btn-preset-save" class="primary" data-i18n="btn.saveConfigAsPreset">保存当前配置为预设</button>
+    </div>
+    <div class="rlist" id="preset-list" style="margin-top:10px"></div>
+  </div>
+</section>
+
+<!-- ============================ 媒体 ============================ -->
+<section class="tabpage" id="page-media">
+  <div class="panel">
+    <h2><span data-i18n="panel.timelapse">延时摄影</span> <span class="tag" id="tl-state" data-i18n="tl.notRunning">未运行</span>
+      <span class="spacer"></span>
+      <span class="hint" id="tl-detail"></span>
+    </h2>
+    <div class="row">
+      <label class="check"><span data-i18n="tl.period">周期</span>
+        <input type="number" id="tl-start-period" value="30" min="1" max="3600" style="width:80px"> <span data-i18n="label.seconds">秒</span>
+      </label>
+      <button id="btn-tl-start" class="primary" data-i18n="btn.start">开始</button>
+      <button id="btn-tl-hold" data-i18n="btn.hold">保持</button>
+      <button id="btn-tl-end" class="warn" data-i18n="btn.finish">结束并合成</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2><span data-i18n="panel.eventVideos">事件录像</span> <span class="tag" id="event-count">0</span>
+      <span class="spacer"></span>
+      <button id="btn-purge-videos" class="sm danger" data-i18n="btn.purgeVideos">清空录像</button>
+      <button id="btn-purge-stills" class="sm danger" data-i18n="btn.purgeStills">清空抓拍</button>
+      <button id="btn-purge-all" class="sm danger" data-i18n="btn.purgeAll">全部清空</button>
+    </h2>
+    <div class="list" id="events"></div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <h2><span data-i18n="panel.videoFiles">录像文件</span> <span class="tag" id="video-count">0</span></h2>
+      <div class="files" id="videos"></div>
+    </div>
+    <div class="panel">
+      <h2><span data-i18n="panel.stillImages">抓拍图片</span> <span class="tag" id="still-count">0</span></h2>
+      <div class="files" id="stills"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 定时命令 ============================ -->
+<section class="tabpage" id="page-schedule">
+  <div class="panel">
+    <h2 data-i18n="panel.scheduleEditor">新增 / 编辑定时命令</h2>
+    <div class="cols">
+      <label class="field"><span data-i18n="label.weekday">星期</span>
+        <input type="text" id="sc-days" value="*" placeholder="* 或 Mon-Fri 或 Mon,Wed" data-i18n-placeholder="ph.weekday"></label>
+      <label class="field"><span data-i18n="label.time">时刻</span>
+        <input type="time" id="sc-time" value="08:00"></label>
+      <label class="field"><span data-i18n="label.interval">间隔(分钟, &gt;0 时优先)</span>
+        <input type="number" id="sc-interval" min="0" max="1440" value="0"></label>
+      <label class="field"><span data-i18n="label.command">命令</span>
+        <input type="text" id="sc-command" placeholder="record on / tl_start 30 / servo goto 中" data-i18n-placeholder="ph.commandExamples"></label>
+      <label class="check"><input type="checkbox" id="sc-enabled" checked> <span data-i18n="common.enable">启用</span></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btn-sc-save" class="primary" data-i18n="btn.saveCommand">保存命令</button>
+      <button id="btn-sc-reset" data-i18n="btn.clearForm">清空表单</button>
+      <span class="hint" id="sc-hint"></span>
+    </div>
+    <p class="hint"><span data-i18n="hint.internalCommands">内部命令：</span><code>record on|off|pause</code><span data-i18n="sep.list">、</span><code>still</code><span data-i18n="sep.list">、</span><code>tl_start 30</code><span data-i18n="sep.list">、</span><code>tl_hold on|off</code><span data-i18n="sep.list">、</span><code>tl_end</code><span data-i18n="sep.list">、</span><code>motion_enable on|off|toggle</code><span data-i18n="sep.list">、</span><code>motion load_regions NAME</code><span data-i18n="sep.list">、</span><code>motion limits &lt;mag&gt; &lt;count&gt;</code><span data-i18n="sep.list">、</span><code data-i18n="label.servoGoto">servo goto 名称</code><span data-i18n="sep.list">、</span><code>servo set pan tilt</code><span data-i18n="sep.list">、</span><code>start|stop|restart</code><span data-i18n="hint.anyShell">；也可写任意 shell 命令。</span></p>
+  </div>
+
+  <div class="panel">
+    <h2><span data-i18n="panel.commandList">命令列表</span> <span class="tag" id="sc-count">0</span>
+      <span class="spacer"></span>
+      <button id="btn-sc-reload" class="sm" data-i18n="btn.reload">重新载入</button>
+    </h2>
+    <table>
+      <thead><tr><th>#</th><th data-i18n="label.weekday">星期</th><th data-i18n="label.timeOrInterval">时刻/间隔</th><th data-i18n="label.command">命令</th><th data-i18n="common.enable">启用</th><th data-i18n="th.action">操作</th></tr></thead>
+      <tbody id="schedules"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2 data-i18n="btn.runNow">立即执行</h2>
+    <div class="row">
+      <input type="text" id="cmd-text" placeholder="例如：record on" data-i18n-placeholder="ph.exampleRecord" style="flex:1;min-width:160px">
+      <button id="btn-cmd-run" class="primary" data-i18n="btn.execute">执行</button>
+    </div>
+    <pre class="logbox" id="cmd-out" style="height:120px;margin-top:10px"></pre>
+  </div>
+</section>
+
+<!-- ============================ 舵机 ============================ -->
+<section class="tabpage" id="page-servo">
+  <div class="cols">
+    <div class="panel">
+      <h2><span data-i18n="panel.servoStatus">舵机状态</span> <span class="tag" id="servo-tag">–</span></h2>
+      <dl class="kv" id="servo-info"></dl>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-servo-enable" class="primary" data-i18n="btn.enableServo">启用舵机</button>
+        <button id="btn-servo-disable" data-i18n="btn.disableServo">停用舵机</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 data-i18n="panel.manualControl">手动控制</h2>
+      <div class="cols">
+        <label class="field"><span>Pan<b class="val" id="v-servo-pan"></b></span>
+          <input type="range" id="servo-pan" min="0" max="180" step="1"></label>
+        <label class="field"><span>Tilt<b class="val" id="v-servo-tilt"></b></span>
+          <input type="range" id="servo-tilt" min="0" max="180" step="1"></label>
+        <label class="field"><span><span data-i18n="label.smoothMs">平滑时间(ms)</span><b class="val" id="v-servo-smooth"></b></span>
+          <input type="range" id="servo-smooth" min="0" max="3000" step="50"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-servo-set" class="primary" data-i18n="btn.gotoPosition">转到该位置</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="pos-name" placeholder="位置名称" data-i18n-placeholder="servo.positionName" style="flex:1;min-width:120px">
+        <button id="btn-servo-savepos" data-i18n="btn.savePosition">保存为位置预设</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2><span data-i18n="panel.positionPresets">位置预设</span> <span class="tag" id="pos-count">0</span></h2>
+    <div class="rlist" id="servo-positions"></div>
+  </div>
+</section>
+
+<!-- ============================ 系统 ============================ -->
+<section class="tabpage" id="page-system">
+  <div class="cols">
+    <div class="panel">
+      <h2 data-i18n="panel.serviceControl">服务控制</h2>
+      <div class="row">
+        <button id="btn-svc-start" class="primary" data-i18n="btn.startService">启动服务</button>
+        <button id="btn-svc-stop" data-i18n="btn.stopService">停止服务</button>
+        <button id="btn-svc-restart" data-i18n="btn.restartService">重启服务</button>
+      </div>
+      <p class="hint" data-i18n="hint.stopService">停止后画面与侦测将停止，恢复需重新启动服务。</p>
+    </div>
+
+    <div class="panel">
+      <h2><span data-i18n="panel.webcam">摄像头</span> <span class="tag" id="cam-backend-tag">–</span></h2>
+      <div class="row">
+        <select id="cam-select" style="flex:1;min-width:180px">
+          <option value="auto" data-i18n="cam.auto">自动选择</option>
+        </select>
+        <select id="cam-fmt-select" class="minisel" title="采集通路：CSI 走 ISP 硬件 JPEG 或原始 RGB" data-i18n-title="cam.pathHint">
+          <option value="auto" data-i18n="cam.autoPath">自动通路</option>
+          <option value="MJPEG" data-i18n="cam.pathMjpeg">ISP 硬件 JPEG</option>
+          <option value="RGB888" data-i18n="cam.pathRgb">原始 RGB</option>
+        </select>
+        <button id="btn-cam-apply" class="primary" data-i18n="btn.switch">切换</button>
+        <button id="btn-cam-refresh" class="ghost" data-i18n="btn.refreshList">刷新列表</button>
+      </div>
+      <p class="hint" id="cam-hint" data-i18n="cam.loading">正在读取摄像头…</p>
+      <dl class="kv" id="cam-detail"></dl>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <h2 data-i18n="panel.upgradePassword">升级与密码</h2>
+      <div class="row">
+        <button id="btn-upgrade" class="warn" data-i18n="btn.upgrade">一键升级</button>
+        <span class="hint" id="up-state"></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input type="password" id="pwd-input" placeholder="新访问密码（留空则关闭密码保护）" data-i18n-placeholder="pwd.newPlaceholder" style="flex:1;min-width:150px">
+        <button id="btn-pwd" data-i18n="btn.savePassword">保存密码</button>
+      </div>
+      <p class="hint"><span data-i18n="hint.currentState">当前状态：</span><span id="pwd-state" data-i18n="state.detecting">检测中…</span></p>
+      <pre class="logbox" id="up-out" style="height:100px;margin-top:8px"></pre>
+    </div>
+
+    <div class="panel">
+      <h2 data-i18n="panel.versionRelease">版本与发布</h2>
+      <dl class="kv" id="release-info"></dl>
+      <p class="hint"><span data-i18n="hint.releasesKept">每个版本都独立保留在</span> <code>releases/</code> <span data-i18n="hint.rollback">目录下，回滚只需把</span> <code>current</code> <span data-i18n="hint.symlinkBack">软链指回旧版本。</span></p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 data-i18n="panel.eventHooks">事件钩子</h2>
+    <div class="cols">
+      <label class="field"><span data-i18n="hook.onMotionBegin">移动开始 (on_motion_begin)</span>
+        <input type="text" id="hk-on_motion_begin" placeholder="例如：echo {id} &gt;&gt; /tmp/motion.log" data-i18n-placeholder="ph.exampleHook"></label>
+      <label class="field"><span data-i18n="hook.onMotionEnd">移动结束 (on_motion_end)</span>
+        <input type="text" id="hk-on_motion_end" placeholder=""></label>
+      <label class="field"><span data-i18n="hook.onPreviewSave">预览保存 (on_motion_preview_save)</span>
+        <input type="text" id="hk-on_motion_preview_save" placeholder=""></label>
+      <label class="field"><span data-i18n="hook.onTimelapseEnd">延时结束 (on_timelapse_end)</span>
+        <input type="text" id="hk-on_timelapse_end" placeholder=""></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btn-hooks-save" class="primary" data-i18n="btn.saveHooks">保存钩子</button>
+      <span class="hint" id="hooks-hint"></span>
+    </div>
+    <p class="hint"><span data-i18n="hint.placeholders">可用占位符：</span><code>{id}</code> <code>{video}</code> <code>{time}</code> <code>{date}</code> <code>{duration}</code> <code>{algorithm}</code> <code>{region}</code> <code>{media_dir}</code></p>
+    <div class="rlist" id="hooks-history" style="margin-top:8px"></div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <h2 data-i18n="panel.systemInfo">系统信息</h2>
+      <dl class="kv" id="sysinfo"></dl>
+    </div>
+    <div class="panel">
+      <h2 data-i18n="panel.help">帮助说明</h2>
+      <div class="help" id="help"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2><span data-i18n="panel.liveLog">实时日志</span> <span class="tag" data-i18n="log.autoRefresh">每秒刷新</span>
+      <span class="spacer"></span>
+      <label class="check"><input type="checkbox" id="log-auto" checked> <span data-i18n="label.autoScroll">自动滚动</span></label>
+      <button id="btn-log-clear" class="sm" data-i18n="btn.clearScreen">清屏</button>
+    </h2>
+    <div class="logbox" id="logbox"></div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============================ 通用模态框 / 提示条 ============================ -->
+<div class="modal hidden" id="modal">
+  <div class="box">
+    <h3 id="modal-title" data-i18n="btn.confirm">确认</h3>
+    <p id="modal-text"></p>
+    <input type="text" id="modal-input" class="hidden" placeholder="输入名称" data-i18n-placeholder="region.inputName">
+    <div class="row" style="margin-top:12px">
+      <button id="modal-cancel" data-i18n="btn.cancel">取消</button>
+      <button id="modal-ok" class="primary" data-i18n="btn.ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>window.PKC_I18N = {{ i18n | tojson }};</script>
+<script src="{{ url_for('static', filename='i18n.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
