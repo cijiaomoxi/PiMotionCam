@@ -78,7 +78,6 @@ COPYFILE_DISABLE=1 tar czf "$TARBALL" \
   --exclude='*.o' \
   --exclude='__pycache__' \
   --exclude='*.pyc' \
-  --exclude='./deploy.sh' \
   -C "$HERE" .
 
 echo "==> 上传到 releases/${RELEASE}"
