@@ -1,0 +1,4 @@
+# Offline tests and microbenchmarks; Pi runtime uses distro numpy/Pillow.
+Flask>=2.2,<4
+numpy>=1.24,<3
+Pillow>=9.4,<14

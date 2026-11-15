@@ -275,7 +275,10 @@ class Recorder:
             # 帧数太少的窗口是噪声（摄像头刚出流），不能拿去喂编码器：
             # 一旦被当成 1 fps，整个事件视频都会慢放一个数量级。
             if self._rate_frames >= 5:
-                self._rate_fps = self._rate_frames / el
+                # N frame timestamps span N-1 intervals. Counting the first
+                # frame as an interval biases 10 fps toward 10.5/11 fps and
+                # makes the encoded timeline shorter than the actual capture.
+                self._rate_fps = (self._rate_frames - 1) / el
             self._rate_frames = 0
             self._rate_mark = now
         if self.config.get("record", "paused", default=False):

@@ -1,0 +1,40 @@
+{
+  "version": "2.8.0",
+  "platform": "Linux-6.18.50+rpt-rpi-v8-aarch64-with-glibc2.41",
+  "python": "3.13.5",
+  "numpy": "2.2.4",
+  "backend": "native",
+  "repo": ".",
+  "benchmarks": {
+    "detect_1_regions_per_algorithm": {
+      "median_ms": 1.431,
+      "p95_ms": 1.5851,
+      "samples": 80
+    },
+    "detect_8_regions_per_algorithm": {
+      "median_ms": 6.5284,
+      "p95_ms": 6.7164,
+      "samples": 80
+    },
+    "detect_32_regions_per_algorithm": {
+      "median_ms": 23.1556,
+      "p95_ms": 23.4318,
+      "samples": 80
+    },
+    "audio_rms_2048_samples": {
+      "median_ms": 1.2626,
+      "p95_ms": 1.3049,
+      "samples": 80
+    },
+    "audio_rms_24000_samples": {
+      "median_ms": 15.163,
+      "p95_ms": 15.2889,
+      "samples": 80
+    },
+    "api_state": {
+      "median_ms": 107.9639,
+      "p95_ms": 266.6958,
+      "samples": 80
+    }
+  }
+}

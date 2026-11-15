@@ -1,0 +1,25 @@
+{
+  "MJPEG": {
+    "backend": "rpicam",
+    "jpeg_size": [
+      1280,
+      720
+    ],
+    "camera_ready": true,
+    "format": "MJPEG",
+    "imaging_schema_items": 14
+  },
+  "RGB888": {
+    "backend": "libcamera",
+    "jpeg_size": [
+      1280,
+      720
+    ],
+    "camera_ready": true,
+    "format": "RGB888",
+    "imaging_schema_items": 14
+  },
+  "settings_restored": true,
+  "usb_camera_restored": true,
+  "audio_running_after_restore": true
+}

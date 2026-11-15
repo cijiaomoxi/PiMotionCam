@@ -1,0 +1,31 @@
+name: Compatibility and performance checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: sudo apt-get update -qq && sudo apt-get install -y libjpeg-dev ffmpeg
+      - run: python -m pip install -r requirements-test.txt
+      - run: python -c 'from core import native; ok, log = native.build(force=True); print(log); assert ok; assert native.available()'
+      - run: python tools/test_audio.py
+      - run: python tools/test_v270.py --quiet
+      - run: python tools/test_web_v270.py --quiet
+      - run: python tools/test_optimizations.py
+      - run: cc -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer tools/test_native_sanitizer.c -ljpeg -lm -o /tmp/pkc-sanitizer && /tmp/pkc-sanitizer
+      - run: PKC_NO_NATIVE=1 python tools/test_optimizations.py
+      - run: node --test tools/test_polling.cjs
+      - run: node --check static/app.js && node --check static/polling.js
+      - run: bash -n build_native.sh deploy.sh install.sh package.sh
+      - run: bash package.sh --out /tmp/pkc-packages --no-zip

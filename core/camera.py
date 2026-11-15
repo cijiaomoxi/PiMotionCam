@@ -56,6 +56,18 @@ USB_FORMATS = ["MJPEG", "RGB888", "XBGR8888", "YUYV", "YUV420"]
 
 COMPRESSED = {"MJPEG"}
 
+
+def _enqueue_latest(q: queue.Queue, frame: bytes) -> None:
+    """Keep the newest frame when a single-producer capture queue fills up."""
+    try:
+        q.put_nowait(frame)
+    except queue.Full:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            pass
+        q.put_nowait(frame)
+
 # 这些是树莓派自己的媒体设备，不是 USB 摄像头
 _PLATFORM_HINTS = ("bcm2835", "unicam", "rpi-hevc", "vchiq")
 
@@ -217,13 +229,7 @@ class V4L2Backend:
                         break
                     frame = bytes(buf[s:e + 2])
                     del buf[:e + 2]
-                    try:
-                        self._q.put_nowait(frame)
-                    except queue.Full:
-                        try:
-                            self._q.get_nowait()
-                        except queue.Empty:
-                            pass
+                    _enqueue_latest(self._q, frame)
         except Exception as exc:  # noqa: BLE001
             self.error = f"{type(exc).__name__}: {exc}"
 
@@ -428,13 +434,7 @@ class RpiVidBackend:
                         break
                     frame = bytes(buf[s:e + 2])
                     del buf[:e + 2]
-                    try:
-                        self._q.put_nowait(frame)
-                    except queue.Full:
-                        try:
-                            self._q.get_nowait()
-                        except queue.Empty:
-                            pass
+                    _enqueue_latest(self._q, frame)
         except Exception as exc:  # noqa: BLE001
             self.error = f"{type(exc).__name__}: {exc}"
         finally:

@@ -685,4 +685,10 @@ HELP = {
     "help.5.body": ('支持 RPi.GPIO 或 ServoBlaster 驱动云台舵机，可保存位置预设并设置平移俯仰限位与平滑移动时间。', 'Pan-tilt servos are driven through RPi.GPIO or ServoBlaster. Position presets can be saved, and the pan/tilt travel limits plus a smoothing time can be configured.'),
     "help.6.title": ('运维', 'Operations'),
     "help.6.body": ('systemctl --user status pikrellcam-lite 查看状态；journalctl --user -u pikrellcam-lite -f 查看实时日志。', "Use 'systemctl --user status pikrellcam-lite' to check the service state and 'journalctl --user -u pikrellcam-lite -f' to follow the live log."),
+    "help.7.title": ('音频与录制倒计时', 'Audio and recording countdown'),
+    "help.7.body": ('在媒体页启用音频并选择麦克风，事件与循环录像会保存为带 AAC 音轨的 MP4。预录段也包含对应声音。实时电平表可用于确认采集；预览上的倒计时显示当前事件或循环段剩余时长。', 'Enable audio and select a microphone on the Media tab to save event and loop recordings as MP4 with AAC sound, including the matching pre-roll audio. Use the live meter to check capture. The preview countdown shows the time remaining in the current event or loop segment.'),
+    "help.8.title": ('循环录像与存储', 'Loop recording and storage'),
+    "help.8.body": ('循环录像按设定时长分段，运动事件优先，事件结束后恢复循环录像。达到容量上限时优先回收旧循环段。外部存储不可用时按配置暂停或回退；媒体数量和占用统计最多延迟 3 秒刷新，磁盘剩余空间实时读取。', 'Loop recording splits video into timed segments, yields to motion events and resumes afterwards. Old loop segments are reclaimed first when a disk limit is reached. Unavailable external storage pauses recording or uses the configured fallback. Media counts and usage may take up to three seconds to refresh; filesystem free space is read live.'),
+    "help.9.title": ('语言与文档', 'Language and documentation'),
+    "help.9.body": ('顶栏可切换简体中文或 English，选择会自动保存。项目 README 提供中英双语概览，并链接完整的中文和英文使用文档。', 'Use the top bar to switch between Simplified Chinese and English; your choice is saved automatically. The project README provides a bilingual overview and links to the complete Chinese and English user guides.'),
 }

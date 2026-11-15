@@ -12,7 +12,8 @@ const $ = (id) => document.getElementById(id);
 
 function setText(id, text) {
   const el = $(id);
-  if (el) el.textContent = (text === null || text === undefined || text === '') ? '–' : text;
+  const value = (text === null || text === undefined || text === '') ? '–' : String(text);
+  if (el && el.textContent !== value) el.textContent = value;
 }
 
 function esc(s) {
@@ -119,7 +120,18 @@ async function api(path, opts) {
   return data;
 }
 
-const GET = (p) => api(p);
+const pendingGET = new Map();
+function GET(p) {
+  if (pendingGET.has(p)) return pendingGET.get(p);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  const result = api(p, { signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+    pendingGET.delete(p);
+  });
+  pendingGET.set(p, result);
+  return result;
+}
 const POST = (p, body) => api(p, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -1843,6 +1855,7 @@ async function loadLog() {
   try {
     const r = await GET('/api/log');
     const lines = r.lines || [];
+    if (lines.length === LOG_LINES.length && lines.every((line, i) => line === LOG_LINES[i])) return;
     LOG_LINES = lines;
     const box = $('logbox');
     box.innerHTML = lines.map((l) => {
@@ -2057,13 +2070,17 @@ async function init() {
   $('btn-loop-purge').addEventListener('click', purgeLoop);
   $('btn-audio-save').addEventListener('click', saveAudio);
 
-  setInterval(pollState, 1000);
-  setInterval(loadLog, 1000);
-  setInterval(loadTimelapse, 3000);
-  setInterval(() => {
-    const p = document.getElementById('page-media');
-    if (p && p.classList.contains('active')) loadAudio(true);
-  }, 400);
+  const visible = () => !document.hidden;
+  const onTab = (name) => visible() && $('page-' + name).classList.contains('active');
+  [
+    PKCPolling.createPoller(pollState, 1000, visible),
+    PKCPolling.createPoller(loadLog, 1000, () => onTab('system')),
+    PKCPolling.createPoller(loadTimelapse, 3000, () => onTab('media')),
+    PKCPolling.createPoller(() => loadAudio(true), 400, () => onTab('media'))
+  ].forEach((poller) => poller.start());
+  document.addEventListener('visibilitychange', () => {
+    if (visible()) pollState();
+  });
   setTimeout(loadServo, 500);
 }
 

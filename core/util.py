@@ -12,6 +12,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .media_stats import scan_media
+
 
 def now_ts() -> float:
     return time.time()
@@ -53,16 +55,8 @@ def run_command(cmd: str, timeout: float = 60, cwd: str | None = None) -> tuple[
 
 
 def dir_size(path: Path) -> int:
-    total = 0
-    if not path.exists():
-        return 0
-    for p in path.rglob("*"):
-        try:
-            if p.is_file():
-                total += p.stat().st_size
-        except OSError:
-            pass
-    return total
+    # Deliberately uncached: quota enforcement must use current file sizes.
+    return scan_media(path)["disk_bytes"]
 
 
 # ----------------------------------------------------------------------

@@ -29,6 +29,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+try:
+    import numpy as np
+except ImportError:  # Keep the standalone audio tools usable without numpy.
+    np = None
+
 # ---- 默认值 -------------------------------------------------------------
 # 这颗 USB 摄像头自带的麦克风原生就是 16 kHz 单声道（48 kHz 与立体声会被
 # ALSA 拒绝），所以默认就用原生参数：既省 CPU，音质也不吃亏。
@@ -436,10 +441,13 @@ class AudioCapture:
         n = len(data) // 2
         if n <= 0:
             return 0.0
-        total = 0
-        for i in range(0, n * 2, 2):
-            v = struct.unpack_from("<h", data, i)[0]
-            total += v * v
+        if np is not None:
+            samples = np.frombuffer(data, dtype="<i2", count=n)
+            # Widen before squaring: int16 multiplication overflows even at
+            # ordinary microphone levels. int64 preserves the scalar result.
+            total = int(np.square(samples, dtype=np.int64).sum(dtype=np.int64))
+        else:
+            total = sum(v * v for (v,) in struct.iter_unpack("<h", data[:n * 2]))
         rms = (total / n) ** 0.5
         if rms <= 0:
             return 0.0

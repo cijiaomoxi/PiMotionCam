@@ -96,6 +96,7 @@ def test_pages():
     check("首页含 data-i18n 标记", 'data-i18n="' in html)
     check("首页注入 window.PKC_I18N", "window.PKC_I18N" in html)
     check("首页引入 i18n.js", "i18n.js" in html)
+    check("首页引入 polling.js", "polling.js" in html)
     check("首页含语言切换器容器", 'id="lang-switch"' in html)
 
     st, body = req("GET", "/static/i18n.js", raw=True)
@@ -105,6 +106,8 @@ def test_pages():
     st, body = req("GET", "/static/app.js", raw=True)
     check("GET /static/app.js", st == 200 and b"function t(" not in body,
           "HTTP %s" % st)
+    st, body = req("GET", "/static/polling.js", raw=True)
+    check("GET /static/polling.js", st == 200 and b"createPoller" in body)
 
     st, body = req("GET", "/snapshot.jpg", raw=True)
     check("GET /snapshot.jpg 返回 JPEG", st == 200 and body[:2] == b"\xff\xd8",
@@ -131,6 +134,9 @@ def test_reads():
     get_json("GET /api/schedules", "/api/schedules")
     get_json("GET /api/servo", "/api/servo")
     get_json("GET /api/timelapse", "/api/timelapse")
+    get_json("GET /api/loop", "/api/loop", ("enabled", "recording", "segments"))
+    get_json("GET /api/audio", "/api/audio", ("enabled", "running", "level"))
+    get_json("GET /api/imaging", "/api/imaging", ("values", "schema"))
     get_json("GET /api/hooks", "/api/hooks")
     get_json("GET /api/auth", "/api/auth")
     get_json("GET /api/release", "/api/release")
@@ -151,7 +157,8 @@ def test_i18n():
     check("GET /api/i18n 结构完整", ok, "HTTP %s" % st)
     if not ok:
         return
-    lang0 = data.get("language")
+    _, cfg0 = req("GET", "/api/config")
+    lang0 = cfg0.get("web", {}).get("language", "auto")
     codes = [a.get("code") for a in data.get("available", [])]
     # 先切到 auto，后面才能验证「按浏览器 Accept-Language 协商」
     req("POST", "/api/i18n", {"language": "auto"})
@@ -196,9 +203,8 @@ def test_i18n():
 
     # 还原
     req("POST", "/api/i18n", {"language": lang0 or "auto"})
-    st, data = req("GET", "/api/i18n")
-    check("语言已还原", data.get("language") == lang0,
-          "%s != %s" % (data.get("language"), lang0))
+    st, data = req("GET", "/api/config")
+    check("语言已还原", data.get("web", {}).get("language") == lang0)
 
 
 def test_writes():
@@ -213,10 +219,8 @@ def test_writes():
         skip("POST /api/algorithms", "GET 失败")
 
     # --- 运动侦测开关：关再开 ---
-    st, state = req("GET", "/api/state")
-    was = state.get("motion") if isinstance(state, dict) else None
-    if not isinstance(was, bool):
-        was = (state.get("motion") or {}).get("enabled") if isinstance(state, dict) else None
+    st, state = req("GET", "/api/config")
+    was = state.get("motion", {}).get("enabled") if isinstance(state, dict) else None
     if isinstance(was, bool):
         st, r = req("POST", "/api/motion", {"enabled": not was})
         check("POST /api/motion 切换开关", st == 200, "HTTP %s" % st)
@@ -248,6 +252,7 @@ def test_writes():
     check("POST /api/record on", st == 200, "HTTP %s" % st)
     st, r = req("POST", "/api/record", {"action": "off"})
     check("POST /api/record off", st == 200, "HTTP %s" % st)
+    req("POST", "/api/record", {"action": "off" if cfg.get("record", {}).get("paused") else "on"})
 
     # --- 抓拍 ---
     st, r = req("POST", "/api/still")
@@ -357,14 +362,23 @@ def main() -> int:
         print("服务不可达（HTTP %s），先启动服务再跑回归。" % st)
         return 2
 
-    test_pages()
-    test_reads()
-    test_i18n()
-    test_writes()
-    if args.destructive:
-        test_destructive()
-    else:
-        skip("有副作用的操作", "加 --destructive 才跑")
+    cfg_status, original = req("GET", "/api/config")
+    if cfg_status != 200 or not isinstance(original, dict):
+        return 2
+    try:
+        test_pages()
+        test_reads()
+        test_i18n()
+        test_writes()
+        if args.destructive:
+            test_destructive()
+        else:
+            skip("有副作用的操作", "加 --destructive 才跑")
+    finally:
+        # Restore settings even if a test fails or is interrupted. Never infer
+        # the configured motion switch from the instantaneous motion result.
+        restored, _ = req("POST", "/api/config", original)
+        check("测试后配置恢复", restored == 200)
 
     npass = sum(1 for _n, s, _d in results if s == PASS)
     nfail = sum(1 for _n, s, _d in results if s == FAIL)

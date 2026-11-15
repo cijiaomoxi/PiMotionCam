@@ -1,0 +1,46 @@
+{
+  "version": "2.8.1",
+  "platform": "Linux-6.18.50+rpt-rpi-v8-aarch64-with-glibc2.41",
+  "python": "3.13.5",
+  "numpy": "2.2.4",
+  "backend": "native",
+  "repo": "/home/pi/pikrellcam-lite/current",
+  "benchmarks": {
+    "detect_1_regions_per_algorithm": {
+      "median_ms": 1.4592,
+      "p95_ms": 2.6159,
+      "samples": 80
+    },
+    "detect_8_regions_per_algorithm": {
+      "median_ms": 1.7167,
+      "p95_ms": 3.2571,
+      "samples": 80
+    },
+    "detect_32_regions_per_algorithm": {
+      "median_ms": 2.5529,
+      "p95_ms": 3.0254,
+      "samples": 80
+    },
+    "detect_configured_regions": {
+      "median_ms": 0.4097,
+      "p95_ms": 0.6699,
+      "samples": 80
+    },
+    "audio_rms_2048_samples": {
+      "median_ms": 0.0492,
+      "p95_ms": 0.0734,
+      "samples": 80
+    },
+    "audio_rms_24000_samples": {
+      "median_ms": 0.157,
+      "p95_ms": 0.2327,
+      "samples": 80
+    },
+    "api_state": {
+      "median_ms": 7.4333,
+      "p95_ms": 16.1466,
+      "samples": 80
+    }
+  },
+  "configured_region_specs": 4
+}

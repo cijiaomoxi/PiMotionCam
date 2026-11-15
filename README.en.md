@@ -1,10 +1,16 @@
 # pikrellcam-lite v2
 
-A **motion-detection recording service** for Raspberry Pi OS (Debian 13 / trixie, 64-bit). It reproduces the full
-set of web features of the official [PiKrellCam](https://github.com/billw2/pikrellcam), implements them on the
+[中文 / English project home](README.md) · [中文技术说明](README.zh-CN.md) · [English user guide](docs/USAGE.en.md)
+
+A **motion-detection recording service** for Raspberry Pi OS (Debian 13 / trixie, 64-bit). Inspired by the feature
+design of the official [PiKrellCam](https://github.com/billw2/pikrellcam), it implements recording on the
 current **libcamera / picamera2** camera stack, and additionally supports **USB cameras**.
 
-Access URL: **http://pi.local:8080/** — current version: **v2.6.0**
+Access URL: **http://pi.local:8080/** — current version: **v2.8.1**
+
+v2.8.1 retains v2.8.0 features, configuration and APIs while optimizing multi-region detection,
+audio metering and media statistics. See [Performance and validation](docs/PERFORMANCE.md)
+for the changes, measurement method and compatibility checks.
 
 `CSI + USB cameras` `libcamera / picamera2` `Frame-differencing motion detection` `Native C kernel` `Event recording with pre/post-roll` `Graphical motion regions` `Dual far/near algorithms` `Timelapse` `Servo pan/tilt` `Scheduled commands` `Event hooks` `Bilingual UI` `Versioned releases with one-command rollback`
 

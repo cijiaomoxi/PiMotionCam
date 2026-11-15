@@ -20,15 +20,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$HERE/dist"
 DO_ZIP=1
 
-for arg in "$@"; do
-  case "$arg" in
-    --out=*) OUT_DIR="${arg#--out=}" ;;
-    --out)   shift; OUT_DIR="${1:-}" ;;
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --out=*) OUT_DIR="${1#--out=}" ;;
+    --out)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "--out 需要目录参数" >&2; exit 1; }
+      OUT_DIR="$2"; shift ;;
     --no-zip) DO_ZIP=0 ;;
     -h|--help)
       sed -n '2,20p' "$0"; exit 0 ;;
-    *) echo "未知参数: $arg" >&2; exit 1 ;;
+    *) echo "未知参数: $1" >&2; exit 1 ;;
   esac
+  shift
 done
 
 die() { echo "错误: $*" >&2; exit 1; }
@@ -68,13 +71,16 @@ copy docs
 copy tools
 copy install.sh
 copy deploy.sh
+copy package.sh
 copy build_native.sh
 copy krellcam.py
 copy config.json
 copy README.md
+copy README.zh-CN.md
 copy README.en.md
 copy CHANGELOG.md
 copy LICENSE
+copy requirements-test.txt
 
 # 打包配置示例（去掉本机密码哈希与个人路径）
 if [ -f "$PKGDIR/config.json" ]; then
@@ -99,6 +105,7 @@ fi
 echo "==> 清理"
 find "$PKGDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$PKGDIR" -name '*.pyc' -type f -delete 2>/dev/null || true
+find "$PKGDIR" -type f \( -name '*.so' -o -name '*.o' \) -delete
 find "$PKGDIR" -name '.DS_Store' -type f -delete 2>/dev/null || true
 rm -rf "$PKGDIR/versions" "$PKGDIR/media" "$PKGDIR/logs" "$PKGDIR/venv" 2>/dev/null || true
 chmod +x "$PKGDIR/install.sh" "$PKGDIR/build_native.sh" "$PKGDIR/krellcam.py" \
@@ -109,19 +116,21 @@ chmod +x "$PKGDIR/install.sh" "$PKGDIR/build_native.sh" "$PKGDIR/krellcam.py" \
 # ----------------------------------------------------------------------
 echo "==> 校验"
 REQUIRED=(
-  "core/__init__.py" "core/app.py" "core/camera.py" "core/config.py"
+  "core/__init__.py" "core/app.py" "core/audio.py" "core/camera.py" "core/config.py"
   "core/detect.py" "core/hooks.py" "core/i18n.py" "core/imaging.py"
   "core/native.py" "core/presets.py" "core/recorder.py" "core/scheduler.py"
   "core/servo.py" "core/state.py" "core/storage.py" "core/timelapse.py"
-  "core/util.py" "core/web.py"
+  "core/util.py" "core/web.py" "core/media_stats.py"
   "core/_pkc_native.c"
   "core/locales/zh-CN.json" "core/locales/en-US.json"
   "templates/index.html" "templates/login.html"
-  "static/app.js" "static/i18n.js" "static/style.css"
-  "docs/使用文档.md" "docs/USAGE.en.md" "docs/上游功能对照.md"
-  "README.md" "README.en.md" "CHANGELOG.md" "LICENSE"
-  "install.sh" "build_native.sh" "krellcam.py" "deploy.sh"
+  "static/app.js" "static/i18n.js" "static/polling.js" "static/style.css"
+  "docs/使用文档.md" "docs/USAGE.en.md" "docs/上游功能对照.md" "docs/PERFORMANCE.md"
+  "README.md" "README.zh-CN.md" "README.en.md" "CHANGELOG.md" "LICENSE" "requirements-test.txt"
+  "install.sh" "build_native.sh" "krellcam.py" "deploy.sh" "package.sh"
   "tools/test_v270.py" "tools/test_web_v270.py" "tools/test_audio.py"
+  "tools/test_optimizations.py" "tools/test_polling.cjs" "tools/benchmark.py"
+  "tools/test_native_sanitizer.c"
 )
 MISSING=0
 for rel in "${REQUIRED[@]}"; do
@@ -182,6 +191,7 @@ PY
 # 4. 生成发布包
 # ----------------------------------------------------------------------
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 TARBALL="$OUT_DIR/$BASE.tar.gz"
 ZIP="$OUT_DIR/$BASE.zip"
 
@@ -203,7 +213,7 @@ PKGDIR="$CHECKDIR/pikrellcam-lite"
 
 python3 -m compileall -q "$PKGDIR/core" "$PKGDIR/tools" >/dev/null 2>&1 || true
 if command -v node >/dev/null 2>&1; then
-  for js in "$PKGDIR/static/app.js" "$PKGDIR/static/i18n.js"; do
+  for js in "$PKGDIR/static/app.js" "$PKGDIR/static/i18n.js" "$PKGDIR/static/polling.js"; do
     node --check "$js" || die "解包后 JS 语法校验失败: $js"
   done
   echo "    JS 语法校验通过"

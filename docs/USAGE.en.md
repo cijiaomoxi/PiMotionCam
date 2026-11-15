@@ -2,9 +2,9 @@
 
 Written for users who already have a Raspberry Pi and want to install and run a motion-detection recording service on it.
 
-- Applies to: **v2.6.0** (current development version is v2.6.0; this release is v2.6.0)
+- Applies to: **v2.8.1** · [中文](使用文档.md) · [Bilingual project home](../README.md)
 - Web interface: **http://pi.local:8080/**
-- Companion document: technical internals and design rationale live in `README.md` at the repository root. This guide covers "how do I install it and use it".
+- Companion document: technical internals and design rationale live in [README.en.md](../README.en.md). This guide covers "how do I install it and use it".
 - Acknowledgements and reference: <https://github.com/billw2/pikrellcam> — this is an independent, unofficial implementation; see "Acknowledgements and References" in the repository root `README.md`.
 
 ---
