@@ -34,8 +34,7 @@ built on the **feature design and user experience** of
   kernel**, **USB camera support**, and **versioned one-command install/rollback**.
 - **Different implementation**: PiKrellCam is built on the proprietary MMAL camera stack that Debian 13 removed;
   this project re-implements the capture and motion-detection pipeline on the official **libcamera / picamera2**
-  stack (see "Why Not the Official PiKrellCam"). The stacks differ entirely: upstream is C + PHP, this
-  project is Python / Flask.
+  stack. The stacks differ entirely: upstream is C + PHP, this project is Python / Flask.
 - **Provenance**: this is an **independent implementation**. The repository **contains no PiKrellCam source
   code** and is **not a fork** of it; only the upstream feature design, interaction flow and documentation
   wording were referenced. This repository is released under the **MIT** license (see [LICENSE](LICENSE));
@@ -48,24 +47,6 @@ built on the **feature design and user experience** of
 
 > Contributions that correct or extend this attribution are welcome — please open an issue or a pull request.
 
----
-
-## Why Not the Official PiKrellCam
-
-The last commit of the official PiKrellCam dates to 2020-06-08, and it is built on the legacy camera stack that
-Debian 13 has removed:
-
-| Official dependency | Status on a current system |
-| --- | --- |
-| `/opt/vc` + `libbrcmmmal-dev` / `libbcm-host-dev` | Delisted from the repositories; `/opt/vc` no longer exists |
-| Prebuilt 32-bit ARM (armhf) ELF binaries | The system has no `/lib/ld-linux-armhf.so.3`, so they cannot execute |
-| MMAL hardware motion vectors | They belong to the old proprietary stack and are not exposed to user space by the new libcamera stack |
-
-163 `mmal_` call sites in the official source cannot be compiled or run on a pure new-stack system. This
-implementation keeps the **user experience** of PiKrellCam but replaces the hardware motion vectors with **frame
-differencing**, so it works on a Chinese-locale Raspberry Pi with Raspberry Pi Connect.
-
----
 
 ## Feature Comparison
 
@@ -97,10 +78,12 @@ differencing**, so it works on a Chinese-locale Raspberry Pi with Raspberry Pi C
 | Stall self-healing | ✅ Frame-fetch watchdog + automatic degradation (resolution → frame rate → fall back to RGB888); a dead pipeline is rebuilt automatically (v2.3.0+) |
 | Loop recording | ✅ Continuous recording split into fixed-length segments, oldest segments deleted when the disk cap is exceeded; yields to the event recorder on motion (v2.7.0+) |
 | Imaging parameter matrix | ✅ Brightness / contrast / saturation / sharpness / denoise / exposure / metering / EV / ISO / shutter / white balance / digital zoom, applied per capture path (v2.7.0+) |
+| Recordings with sound | ✅ Microphone captured continuously into a ring buffer, sliced out after the recording and muxed in; the pre-roll of an event clip carries the matching audio (v2.8.0+) |
+| Recording countdown | ✅ While an event recording runs, the picture shows how many seconds are left; with only the loop recorder running it shows the time left in the current segment (v2.8.0+) |
 | Video / snapshot / timelapse / archive pages | ✅ Media tab + remote archiving (scp) |
 | System log page | ✅ Continuously scrolling log |
 | Help page | ✅ Built-in documentation |
-| Audio stream | ⚠️ Requires a USB sound card, not implemented |
+| Audio stream | ❌ Not implemented (live audio in the browser), see "Known Limitations" |
 | Hardware motion vectors | ❌ Not available in the new stack; replaced by frame differencing |
 
 ---
@@ -529,6 +512,92 @@ curl -s -X POST http://<pi>:8080/api/imaging \
 
 ---
 
+## Audio (since v2.8.0)
+
+The Media tab has an "音频 / Audio" panel. Once it is enabled, loop segments and event recordings both carry an
+**audio track**, and the sound stays in sync with the picture.
+
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| `record.audio_enabled` | Enable microphone capture | `false` |
+| `record.audio_device` | Capture device: `auto` / `hw:N,M` / `plughw:N,M` | `auto` |
+| `record.audio_rate` | Sample rate (Hz) | `16000` |
+| `record.audio_channels` | Channel count | `1` |
+| `record.audio_bitrate` | AAC bitrate (kbps) | `64` |
+| `record.audio_buffer_seconds` | Length of the in-memory ring buffer (seconds) | `180` |
+
+It is **off** by default: a machine without a microphone should not report an error all day.
+
+### How the audio gets into the recording
+
+The microphone does **not** go straight into the encoder. A resident `arecord` process reads raw PCM into an
+in-memory **ring buffer**; once the recording has finished, the slice belonging to its wall-clock time window is
+cut out of that buffer and muxed into the MP4 with ffmpeg:
+
+```
+resident arecord ──► PCM ring buffer (180 seconds by default)
+                          │
+recording closed (moov written) ──┴──► slice the window ──► ffmpeg -c:v copy -c:a aac ──► clip with audio
+```
+
+Why not feed ALSA into the encoder directly? Because an event recording starts with a **pre-roll**
+(`record.pre_seconds`, 5 seconds by default): the picture at the beginning is from five seconds ago, so the
+sound at that moment has to be from five seconds ago as well. The audio track of an event recording therefore
+starts at the moment of the **earliest frame in the pre-roll buffer**, and the track of a loop segment starts
+when the segment started.
+
+The end of the window is computed from the **video's own timeline** (frame count ÷ the frame rate the encoder
+actually used), not from the wall clock at close time — the latter makes the track nearly a second longer than
+the picture.
+
+Parts of the window that the ring buffer does not cover are **padded with silence** instead of shifting the
+track. A silent beginning is better than a drifting soundtrack.
+
+The video is **not re-encoded** (`-c:v copy`); only the audio track is added. AAC is used rather than the
+upstream's MP3 because MP4 supports AAC natively: no second container pass, and browsers and phones play the
+result directly.
+
+### Using a different microphone
+
+The device drop-down lists **every** ALSA capture device on the machine (the output of `arecord -l`), so
+"not the microphone built into the camera, but an external USB one" simply means: plug it in, pick it in the
+drop-down, save.
+
+The default `auto` prefers **the microphone on the same USB port as the camera** — the microphone of a USB
+camera sits on that very port. Only when there is none does it fall back to any USB device.
+
+### Command line
+
+```bash
+# list all capture devices
+arecord -l
+
+# current audio state (device, level, sample rate)
+curl -s http://<pi>:8080/api/audio | python3 -m json.tool
+
+# enable audio with a specific device
+curl -s -X POST http://<pi>:8080/api/audio \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"device":"plughw:3,0"}'
+
+# internal command
+curl -s -X POST http://<pi>:8080/api/command \
+  -H 'Content-Type: application/json' -d '{"command":"audio status"}'
+```
+
+### Limitations
+
+- The ring buffer is only `audio_buffer_seconds` long (180 seconds by default). The **pre-roll cannot reach
+  further back than that**; anything older is padded with silence.
+- An ALSA capture device is **exclusive**: if another program holds it (a player, a voice assistant), the capture
+  fails.
+- The native format of a device is not necessarily 16 kHz mono. Use `plughw:` rather than `hw:` and the plugin
+  handles the conversion.
+- The **audio stream** (live audio in the browser) and **audio-triggered recording** (record when the sound
+  crosses a threshold) are not implemented — they are separate subsystems.
+
+---
+
 ## Deployment
 
 ### Method 1: Versioned Publishing (recommended)
@@ -781,7 +850,7 @@ echo "record off" > ~/.pikrellcam/commands.fifo
   moving); raising `magnitude_limit` and `count_limit` mitigates this.
 - **The orientation of the camera matters**: with the lens pointed at a monitor, the changing content of the screen
   is treated as "motion" and the service keeps triggering recordings.
-- No audio stream (this would require a USB sound card).
+- The **audio stream** (live audio in the browser) and **audio-triggered recording** are not implemented; recordings with sound themselves are supported (v2.8.0+).
 - **A recording has to be closed properly to be playable.** The MP4 index (`moov`) is written by ffmpeg when it exits, so a power cut or a `kill -9` leaves a file that cannot be opened. The service removes such leftovers on startup, so every entry in the recordings list can be played — but the segment that was being recorded at the moment the power went out is still lost.
 - Flask runs on its development server; that is good enough for a home LAN, but add your own reverse proxy before
   exposing it to the internet.
