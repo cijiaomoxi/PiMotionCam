@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 | --- | --- | --- |
+| [2.8.0](#280---2026-11-14) | 2026-11-14 | Audio subsystem — recordings with sound |
 | [2.7.0](#270---2026-11-13) | 2026-11-13 | Loop recording + imaging parameter matrix |
 | [2.6.0](#260---2026-11-13) | 2026-11-13 | Record to USB / external storage with safe unplug handling |
 | [2.5.0](#250---2026-11-11) | 2026-11-11 | Bilingual interface (Chinese / English) |
@@ -24,6 +25,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | [2.1.1](#211---2026-11-09) | 2026-11-09 | `GET /api/release`, camera selector on the preview tab |
 | [2.1.0](#210---2026-11-09) | 2026-11-09 | USB cameras, versioned publishing, servo pan/tilt |
 | [2.0.0](#200---2026-11-08) | 2026-11-08 | First release |
+
+---
+
+## [2.8.0] - 2026-11-14
+
+The audio subsystem: **recordings with sound**. A microphone is captured continuously into a memory ring buffer and
+muxed into the finished clip, so both loop segments and event recordings carry an audio track that stays in sync
+with the picture.
+
+### Added
+
+- **`core/audio.py` — the audio subsystem.**
+  - *Device discovery.* All ALSA capture devices are enumerated (`arecord -l`) and enriched with their USB path
+    from `/proc/asound/cards`, so the device list can tell "the microphone on the same USB port as the camera"
+    from "some other USB microphone". The default selection prefers **the microphone on the same USB port as the
+    camera** (a USB camera's own microphone sits on that very port), then any USB device, and only then anything
+    else. The ALSA path and the sysfs path spell the port differently, so both are normalised to a port number
+    (`1.3`) before comparing them.
+  - *Continuous capture.* A resident `arecord -q -D plughw:N,M -f S16_LE -r <rate> -c <ch> -t raw` process feeds
+    a **PCM ring buffer** in memory (180 seconds by default). Each block is timestamped with the moment it was
+    read, minus its own duration. The device list is cached for ten seconds, because `arecord -l` spawns a
+    subprocess and the UI polls the status every second.
+  - *Window slicing.* `slice_wav(t0, t1)` cuts the audio for a wall-clock time window out of the ring buffer and
+    **pads the missing parts with silence**, so the result is exactly as long as the window and the picture never
+    drifts. A window that falls completely outside the buffer returns nothing.
+  - *Muxing.* `mux_audio()` runs `ffmpeg -c:v copy -c:a aac -b:a Nk -movflags +faststart`. The video is **not
+    re-encoded** — only the audio track is added. AAC is used instead of the upstream's MP3 because MP4 supports
+    AAC natively: no second container pass, and browsers and phones play the result directly.
+- **The audio track does not go into the encoder.** It is sliced out of the ring buffer **after** the recording is
+  finished and then muxed in. Feeding ALSA straight into the encoder would have been the obvious approach, but an
+  event recording starts with a *pre-roll* (`record.pre_seconds`, 5 seconds by default): the picture at the
+  beginning is from five seconds ago, so the sound at that moment must be too. The audio track of an event
+  recording therefore starts at the moment of the **earliest frame in the pre-roll buffer**, and the audio track
+  of a loop segment starts at the moment the segment started. The end of the window is computed from the video's
+  own timeline (frame count ÷ the frame rate the encoder actually used), not from the wall clock at close time —
+  otherwise the track would be nearly a second longer than the picture.
+- **Muxing happens in a background thread** (`pkc-audio-mux`, with a queue). The capture thread feeds a single
+  encoder and must not be blocked, so the ffmpeg run happens after the recording has been closed.
+- The muxing output file is written **into the same directory as the video**: `/tmp` is a tmpfs on the Pi, and
+  renaming across filesystems fails with `EXDEV`. If the mux fails the original video is left untouched and
+  ffmpeg's error goes to the log.
+- `record.audio_enabled` (default `false` — a machine without a microphone should not report an error all day),
+  `record.audio_device` (`auto` / `hw:N,M` / `plughw:N,M`), `record.audio_rate` (4000–48000, default 16000),
+  `record.audio_channels` (1–2, default 1), `record.audio_bitrate` (16–256 kbps, default 64) and
+  `record.audio_buffer_seconds` (30–900, default 180).
+- `GET /api/audio` reports the configuration, the runtime state, the live level and the list of capture devices;
+  `POST /api/audio` stores `enabled`, `device`, `rate`, `channels`, `bitrate` and `buffer_seconds`, clamping
+  out-of-range values and applying the change immediately. `GET /api/state` gained an `audio` section.
+- The `audio on|off|status` internal command.
+- An "音频 / Audio" panel on the Media tab: switch, device drop-down, sample rate, channel count and a
+  **live level meter**. The device drop-down is what makes "record with a different microphone" possible: every
+  ALSA capture device on the machine is listed, so an external USB microphone can be selected instead of the one
+  built into the camera. The AAC bitrate and the length of the ring buffer have no control on the panel —
+  they are set through `POST /api/audio` or `config.json`.
+- 19 new strings in each language pack (518 in total).
+- **A recording countdown on the picture.** While an event recording is running, the OSD overlay shows how long it is
+  still going to run (`录制中 00:17`): an event clip ends when the movement stops for `record.post_seconds`, or when
+  it hits `record.max_event_seconds`, whichever comes first, so the countdown is the time to the earlier of the two.
+  When only the loop recorder is running, the same line shows the time left in the current segment (`循环段 00:14`).
+  The numbers come from `Recorder.record_status()` and are published as the `record` section of `/api/state`.
+- `tools/test_audio.py` — 57 offline unit tests for the device parsing, the port normalisation, the device
+  selection order, the ring buffer, the window slicing (including the silence padding) and the WAV packing.
+
+### Fixed
+
+- **Event recordings are no longer ten times too long.** The measured frame rate was sampled over a window that
+  started when the service started. When the camera took a while to produce its first frames — which is exactly
+  what happens right after a restart — that window was mostly idle, the measured rate came out below 0.1 fps and
+  was clamped to 1 fps, and the encoder then timestamped every frame one second apart: a 120-second event
+  produced a file claiming to be 1203 seconds long. The sampling window now starts at the **first frame**, a
+  window with fewer than five frames is treated as noise and ignored, and a measured rate below 2 fps is never
+  trusted — the configured rate is used instead.
+- **The audio track is no longer about a second longer than the picture.** The end of the audio window was taken
+  from the wall clock at the moment the recorder closed, but closing the encoder takes a few hundred milliseconds
+  to a second, so the track carried roughly a second of extra sound at the end. The window now ends where the
+  video ends.
+- **Recordings made right after a restart have sound again.** The microphone was started *after* the camera, and
+  opening the camera takes tens of seconds while it waits for the V4L2 stream. For the first half minute after a
+  restart the recordings were silent — and the first event after a restart had no audio track at all, because the
+  time window fell entirely before the microphone had recorded anything. The microphone is now started **before**
+  the camera so the ring buffer warms up immediately, and the device is re-checked once the camera is up, because
+  only then is it known which USB port the camera sits on.
+- **The interface no longer serves stale JavaScript after an upgrade.** Flask sends static files with a
+  `max-age` of twelve hours by default, so a browser that had the console open kept using the old `app.js` and
+  `style.css` — the new panels and the recording countdown simply did not appear until the cache happened to
+  expire. Static files are now sent without caching.
+
+### Notes
+
+- The audio stream of the upstream (`www/audio_stream.php`, listening to the live audio in the browser) and
+  **audio-triggered recording** (`audio_trigger_video` / `audio_trigger_level`) are **not** implemented. They are
+  separate subsystems: the first is a live streaming path, the second needs continuous level detection against a
+  threshold. This release covers "recording with sound".
+- The upstream's `audio_gain_dB` has no counterpart here — the gain is a property of the device and is set with
+  `alsamixer`. The upstream's `box_MP3_only` is not implemented either; the output is always MP4 with AAC.
+- The microphone used for the real-machine test is the one built into a USB "Generalplus WEB CAM", which ALSA
+  exposes as `plughw:3,0` and which natively records 16 kHz mono (48 kHz stereo is rejected by the device; the
+  `plughw:` plugin converts it). The audio of a microphone on a **different** USB port was verified the same way
+  the code selects it: with a kernel-provided loopback sound card standing in for a second, independent
+  microphone, the recorder produced a clip whose audio track came from that device alone.
 
 ---
 

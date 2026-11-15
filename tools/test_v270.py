@@ -362,14 +362,31 @@ class Space:
         return (self.total, self.base_free + freed)
 
 
-def build(root, values, space):
+class FakeAudio:
+    """录像器依赖的最小音频接口。"""
+
+    def __init__(self, running=True):
+        self.running = running
+        self.windows = []      # 被请求切片的时间窗
+        self.sliced = 0
+
+    def slice_wav(self, t0, t1):
+        self.windows.append((t0, t1))
+        self.sliced += 1
+        return b"RIFF" + b"\x00" * 40
+
+    def status(self):
+        return {"state": "running" if self.running else "idle"}
+
+
+def build(root, values, space, audio=None):
     cfg = FakeConfig(root, values)
     for sub in ("videos", "stills", "timelapse", "loop"):
         (cfg.configured / sub).mkdir(parents=True, exist_ok=True)
     cfg.internal.mkdir(parents=True, exist_ok=True)
     storage_mod.disk_usage = space.usage
     st = FakeState()
-    rec = Recorder(cfg, st)
+    rec = Recorder(cfg, st, audio=audio)
     rec._spawn_encoder = lambda cmd: FakeProc(cmd)   # 替掉真的 ffmpeg
     return cfg, st, rec
 
@@ -645,6 +662,212 @@ def test_camera_record_throttle() -> None:
           cam._seq >= 50, "预览更新了 %d 次" % cam._seq)
 
 
+def test_audio_windows() -> None:
+    section("音频：音轨时间窗与事件/循环段的合流")
+    import core.recorder as rec_mod
+
+    tmp = Path(tempfile.mkdtemp(prefix="pkc-audio-rec-"))
+    space = Space(30 * GB, 20 * GB)
+    audio = FakeAudio()
+    cfg, st, rec = build(tmp / "i", {
+        "loop": {"enabled": False, "segment_seconds": 60},
+        "record": {"pre_seconds": 5, "post_seconds": 1, "event_gap_seconds": 0,
+                   "max_event_seconds": 60},
+    }, space, audio=audio)
+    space.bind(cfg.media_dir())
+
+    # 没有音频对象时什么都不做
+    rec.audio = None
+    check("没有音频对象时不算开段", rec._audio_enabled() is False)
+    rec.audio = audio
+    check("音频在跑时算开段", rec._audio_enabled() is True)
+
+    # 合流用替身：记录它被怎么调用
+    calls = []
+    orig = rec_mod.mux_audio
+
+    def fake_mux(video, wav, bitrate, workdir, log=None):
+        calls.append({"video": str(video), "wav": len(wav),
+                      "bitrate": bitrate})
+        return True
+
+    rec_mod.mux_audio = fake_mux
+    try:
+        # 喂几帧形成预录缓冲，然后触发一个事件
+        base = time.time()
+        for i in range(12):
+            rec.on_frame(b"x" * 100, base + i * 0.1)
+        rec.on_frame(b"x" * 100, base + 1.3, motion=True)
+        check("事件已开始", rec._in_event is True)
+        check("音轨起点 = 预录缓冲里最早那一帧",
+              abs(rec._event_audio_start - base) < 0.02,
+              "start=%s base=%s" % (rec._event_audio_start, base))
+
+        # 事件结束 → 自动排队并由后台 worker 合流
+        rec.on_frame(b"x" * 100, base + 3.0, motion=False)
+        check("事件结束", rec._in_event is False)
+        for _ in range(60):
+            if calls:
+                break
+            time.sleep(0.05)
+        check("事件结束后自动合流了", bool(calls), str(calls))
+        check("合流用的是事件录像文件",
+              calls and calls[0]["video"].endswith(".mp4"), str(calls))
+        check("合流拿到了音频数据", calls and calls[0]["wav"] > 0, str(calls))
+        check("音轨切片起点 = 预录起点",
+              audio.windows and abs(audio.windows[0][0] - base) < 0.02,
+              str(audio.windows))
+        # 音轨终点按**视频自己的时间轴**算（帧数 ÷ 编码帧率），不是收尾墙钟：
+        # ffmpeg 收尾要花几百毫秒到一秒，按墙钟切会让音轨比视频长一截。
+        want_end = base + rec._event_frames / max(1, rec._event_fps)
+        check("音轨切片终点 = 视频时间轴终点",
+              audio.windows and abs(audio.windows[0][1] - want_end) < 0.02,
+              str(audio.windows))
+
+        # 循环段也要能合流
+        audio.windows.clear()
+        calls.clear()
+        cfg.set({"loop": {"enabled": True, "segment_seconds": 5}})
+        rec.on_frame(b"x" * 100, base + 10.0)
+        check("循环段已开", rec._loop_active is True)
+        rec.on_frame(b"x" * 100, base + 16.0)      # 超过段长 → 轮换
+        for _ in range(60):
+            if calls:
+                break
+            time.sleep(0.05)
+        check("循环段轮换后也合流了", bool(calls), str(calls))
+        check("循环段合流用的是段文件",
+              calls and calls[0]["video"].endswith(".mp4")
+              and "loop_" in calls[0]["video"], str(calls))
+        check("循环段音轨起点 = 段开始时刻",
+              audio.windows and abs(audio.windows[0][0] - (base + 10.0)) < 0.02,
+              str(audio.windows))
+    finally:
+        rec_mod.mux_audio = orig
+
+
+def test_fps_sampling_robust() -> None:
+    section("帧率采样抗噪：摄像头刚出流时不能把视频录成慢放")
+    tmp = Path(tempfile.mkdtemp(prefix="pkc-fps2-"))
+    space = Space(30 * GB, 20 * GB)
+    cfg, st, rec = build(tmp / "f", {
+        "camera": {"fps": 10},
+        "loop": {"enabled": False, "segment_seconds": 60},
+    }, space)
+    space.bind(cfg.media_dir())
+
+    # 真机场景：服务启动后摄像头过了很久才出流，第一个 2 秒窗口里只有
+    # 零星几帧。旧算法拿"服务启动到现在"的空窗算帧率 → 0.03fps →
+    # 被 max(1) 钳成 1fps，整个事件视频慢放十几倍。
+    t0 = time.time()
+    rec.on_frame(b"x", t0 + 30.0)
+    check("第一帧重置计时窗口",
+          abs(rec._rate_mark - (t0 + 30.0)) < 0.01,
+          str(rec._rate_mark - (t0 + 30.0)))
+
+    # 接下来 2 秒只来 2 帧：样本太少，不该拿它当实测帧率
+    rec.on_frame(b"x", t0 + 31.0)
+    rec.on_frame(b"x", t0 + 32.1)
+    check("样本太少时不更新实测帧率", rec._rate_fps == 0.0, str(rec._rate_fps))
+    check("此时退回配置帧率而不是 1", rec._video_fps() == 10, str(rec._video_fps()))
+
+    # 稳定跑起来后实测值照常采纳
+    for i in range(40):
+        rec.on_frame(b"x", t0 + 32.2 + i / 10.0)
+    check("正常帧率被采纳", abs(rec._rate_fps - 10) < 2, str(rec._rate_fps))
+
+    # 明显不合理的实测值一律不信，退回配置帧率
+    rec._rate_fps = 0.05
+    check("0.05fps 实测值被拒", rec._video_fps() == 10, str(rec._video_fps()))
+    rec._rate_fps = 1.0
+    check("1fps 实测值被拒", rec._video_fps() == 10, str(rec._video_fps()))
+    rec._rate_fps = 1.9
+    check("1.9fps 实测值被拒", rec._video_fps() == 10, str(rec._video_fps()))
+    rec._rate_fps = 2.0
+    check("2fps 以上才采信", rec._video_fps() == 2, str(rec._video_fps()))
+
+
+def test_audio_end_aligns_with_video() -> None:
+    section("音轨终点按视频时间轴算：音画严格对齐")
+    tmp = Path(tempfile.mkdtemp(prefix="pkc-align-"))
+    space = Space(30 * GB, 20 * GB)
+    audio = FakeAudio(running=True)
+    cfg, st, rec = build(tmp / "a", {
+        "camera": {"fps": 10},
+        "record": {"pre_seconds": 0, "post_seconds": 0,
+                   "max_event_seconds": 999, "event_gap_seconds": 0},
+        "loop": {"enabled": False, "segment_seconds": 60},
+    }, space, audio=audio)
+    space.bind(cfg.media_dir())
+
+    # 模拟一次事件：10fps 写 50 帧 = 5 秒视频
+    rec._event_fps = 10
+    rec._event_audio_start = 1000.0
+    rec._event_frames = 50
+    rec._in_event = False
+    rec._event_id = "20260101_000000"
+    out = cfg.media_sub("videos") / "20260101_000000.mp4"
+    # 最小合法 MP4：ftyp + moov（_finish_event 会校验 moov 是否完整）
+    ftyp = b"\x00\x00\x00\x18ftyp" + b"isom" + b"\x00" * 12
+    moov = b"\x00\x00\x00\x10moov" + b"\x00" * 8
+    out.write_bytes(ftyp + moov)
+    rec._queue_mux = lambda path, t0, t1: audio.windows.append((t0, t1))
+    rec._finish_event(1005.4)          # 收尾墙钟比视频晚 0.4 秒
+
+    check("音轨窗口终点按帧数算而不是收尾墙钟",
+          audio.windows and abs(audio.windows[-1][1] - 1005.0) < 0.01,
+          str(audio.windows))
+    check("音轨窗口起点不变",
+          audio.windows and abs(audio.windows[-1][0] - 1000.0) < 0.01,
+          str(audio.windows))
+
+
+def test_record_countdown() -> None:
+    section("录制倒计时：事件录像剩余时间与循环段剩余")
+    tmp = Path(tempfile.mkdtemp(prefix="pkc-count-"))
+    space = Space(30 * GB, 20 * GB)
+    cfg, st, rec = build(tmp / "c", {
+        "record": {"post_seconds": 20, "max_event_seconds": 120},
+        "loop": {"enabled": False, "segment_seconds": 15},
+    }, space)
+    space.bind(cfg.media_dir())
+
+    stt = rec.record_status()
+    check("没在录像时不算录制中", stt["recording"] is False, str(stt))
+    check("没在录像时没有剩余时间", stt["remaining"] is None, str(stt))
+    check("没在录像时没有循环段剩余", stt["loop_remaining"] is None, str(stt))
+
+    # 一个进行中的事件：最后一次移动在 5 秒前，补录 20 秒 → 还剩约 15 秒
+    now = time.time()
+    rec._in_event = True
+    rec._event_start = now - 30
+    rec._event_audio_start = now - 40        # 含 10 秒预录
+    rec._last_motion_at = now - 5
+    stt = rec.record_status()
+    check("事件录像中标记为录制中", stt["recording"] is True, str(stt))
+    check("剩余时间按补录时长算", abs(stt["remaining"] - 15.0) < 0.5, str(stt))
+    check("已录时长含预录", abs(stt["elapsed"] - 40.0) < 0.5, str(stt))
+
+    # 单事件时长上限先到时，剩余时间取上限那个（先到先算）
+    rec._event_start = now - 118
+    stt = rec.record_status()
+    check("时长上限先到时取上限", abs(stt["remaining"] - 2.0) < 0.5, str(stt))
+
+    # 循环段：15 秒一段，已经录了 6 秒 → 还剩约 9 秒
+    rec._in_event = False
+    rec._loop_active = True
+    rec._loop_start = now - 6
+    stt = rec.record_status()
+    check("循环段在录", stt["loop_recording"] is True, str(stt))
+    check("循环段剩余时间正确", abs(stt["loop_remaining"] - 9.0) < 0.5, str(stt))
+
+    # 两者都不在录时，剩余时间必须为空（前端据此隐藏倒计时）
+    rec._loop_active = False
+    stt = rec.record_status()
+    check("空闲时没有循环段剩余", stt["loop_remaining"] is None, str(stt))
+    check("空闲时不算录制中", stt["recording"] is False, str(stt))
+
+
 def main() -> int:
     print("pikrellcam-lite v2.7.0 离线单元测试")
     test_normalize()
@@ -658,8 +881,12 @@ def main() -> int:
     test_global_guard_order()
     test_loop_stats()
     test_video_fps()
+    test_fps_sampling_robust()
     test_loop_reports_paused()
     test_camera_record_throttle()
+    test_audio_windows()
+    test_audio_end_aligns_with_video()
+    test_record_countdown()
 
     print("\n" + "=" * 52)
     print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))

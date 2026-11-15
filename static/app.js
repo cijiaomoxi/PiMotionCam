@@ -36,6 +36,13 @@ function hhmmss(d) {
   return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
 }
 
+/** 倒计时：秒 → mm:ss（向上取整，避免显示 00:00 时其实还剩 0.4 秒） */
+function countdown(sec) {
+  const s = Math.max(0, Math.ceil(Number(sec) || 0));
+  const p = (v) => String(v).padStart(2, '0');
+  return p(Math.floor(s / 60)) + ':' + p(s % 60);
+}
+
 function stamp(ts) {
   if (!ts) return '–';
   const d = new Date(Number(ts) * 1000);
@@ -210,6 +217,22 @@ function renderState(s) {
   setText('osd-preset', s.preset || t('state.notSelected'));
   const bb = det.bbox;
   setText('osd-bbox', bb && bb.length === 4 ? 'bbox ' + bb.join(',') : '');
+
+  // 录制倒计时：事件录像显示"还剩几秒结束"，只有循环录像时显示本段剩余
+  const rec = s.record || {};
+  const recEl = $('osd-rec');
+  if (recEl) {
+    if (rec.recording) {
+      setText('osd-rec', t('osd.recording') + ' ' + countdown(rec.remaining));
+      recEl.className = 'osd-line rec';
+    } else if (rec.loop_recording) {
+      setText('osd-rec', t('osd.looping') + ' ' + countdown(rec.loop_remaining));
+      recEl.className = 'osd-line loop';
+    } else {
+      setText('osd-rec', '');
+      recEl.className = 'osd-line';
+    }
+  }
 
   // 按钮状态（以配置中的侦测开关为准，而不是瞬时的移动状态）
   const detEnabled = (CFG && CFG.motion) ? CFG.motion.enabled !== false : true;
@@ -944,6 +967,95 @@ async function purgeLoop() {
     toast(t('toast.loopPurged'), 'ok');
   } catch (e) {
     toast(t('err.opFailed') + e.message, 'err');
+  }
+}
+
+/* =====================================================================
+ * 音频（麦克风）
+ * ===================================================================*/
+let AUDIO = null;
+
+function audioStateText(st) {
+  if (st === 'running') return t('audio.running');
+  if (st === 'starting') return t('audio.starting');
+  if (st === 'error') return t('audio.error');
+  return t('audio.idle');
+}
+
+function renderAudio() {
+  if (!AUDIO) return;
+  const tag = $('audio-tag');
+  if (tag) {
+    tag.textContent = audioStateText(AUDIO.state);
+    tag.classList.toggle('warn', AUDIO.state !== 'running');
+  }
+
+  // 设备下拉：选项没变才重建，免得把用户正在选的东西冲掉
+  const sel = $('audio-device');
+  if (sel) {
+    const devs = AUDIO.devices || [];
+    const sig = devs.map(d => d.plug_id).join(',') + '|' + (AUDIO.configured_device || '');
+    if (sel.dataset.sig !== sig) {
+      sel.dataset.sig = sig;
+      sel.innerHTML = '';
+      const auto = document.createElement('option');
+      auto.value = 'auto';
+      auto.textContent = t('audio.auto');
+      sel.appendChild(auto);
+      for (const d of devs) {
+        const o = document.createElement('option');
+        o.value = d.plug_id;
+        o.textContent = (d.card_name || d.name || d.plug_id) +
+          (d.usb ? ' · USB' : '');
+        sel.appendChild(o);
+      }
+    }
+    if (document.activeElement !== sel) sel.value = AUDIO.configured_device || 'auto';
+  }
+
+  const rate = $('audio-rate');
+  if (rate && document.activeElement !== rate) rate.value = String(AUDIO.rate || 16000);
+  const ch = $('audio-channels');
+  if (ch && document.activeElement !== ch) ch.value = String(AUDIO.channels || 1);
+  const en = $('audio-enabled');
+  if (en) en.checked = !!AUDIO.enabled;
+
+  let detail = '';
+  if (AUDIO.state === 'error') {
+    detail = t('audio.noDevice') + (AUDIO.error ? t('sep.colon') + AUDIO.error : '');
+  } else if (AUDIO.enabled) {
+    detail = t('audio.detail', {
+      device: AUDIO.device || '-',
+      rate: AUDIO.rate || 0,
+      ch: AUDIO.channels === 2 ? t('audio.stereo') : t('audio.mono')
+    });
+  }
+  setText('audio-detail', detail);
+
+  const meter = $('audio-meter');
+  if (meter) meter.style.width = Math.round((AUDIO.level || 0) * 100) + '%';
+}
+
+async function loadAudio(brief) {
+  try {
+    AUDIO = await GET('/api/audio' + (brief ? '?brief=1' : ''));
+    renderAudio();
+  } catch (e) { /* 忽略 */ }
+}
+
+async function saveAudio() {
+  const body = {
+    enabled: $('audio-enabled') ? $('audio-enabled').checked : false,
+    device: $('audio-device') ? $('audio-device').value : 'auto',
+    rate: +($('audio-rate') ? $('audio-rate').value : 16000),
+    channels: +($('audio-channels') ? $('audio-channels').value : 1)
+  };
+  try {
+    AUDIO = await POST('/api/audio', body);
+    renderAudio();
+    toast(t('toast.audioSaved'), 'ok');
+  } catch (e) {
+    toast(t('err.saveAudio') + e.message, 'err');
   }
 }
 
@@ -1797,7 +1909,7 @@ $('btn-logout').addEventListener('click', async () => {
 const TAB_LOADERS = {
   preview: () => { loadRegions(); loadConfig(); },
   detect: () => { loadConfig(); loadAlgo(); loadPresets(); loadImaging(); },
-  media: () => { loadEvents(); loadFiles('videos'); loadFiles('stills'); loadTimelapse(); loadStorage(); loadLoop(); },
+  media: () => { loadEvents(); loadFiles('videos'); loadFiles('stills'); loadTimelapse(); loadStorage(); loadLoop(); loadAudio(); },
   schedule: () => { loadSchedules(); },
   servo: () => { loadServo(); },
   system: () => { loadHooks(); loadHelp(); loadSystem(); loadLog(); loadCameras(); loadReleaseInfo(); }
@@ -1943,10 +2055,15 @@ async function init() {
   $('btn-imaging-reset').addEventListener('click', resetImaging);
   $('btn-loop-save').addEventListener('click', saveLoop);
   $('btn-loop-purge').addEventListener('click', purgeLoop);
+  $('btn-audio-save').addEventListener('click', saveAudio);
 
   setInterval(pollState, 1000);
   setInterval(loadLog, 1000);
   setInterval(loadTimelapse, 3000);
+  setInterval(() => {
+    const p = document.getElementById('page-media');
+    if (p && p.classList.contains('active')) loadAudio(true);
+  }, 400);
   setTimeout(loadServo, 500);
 }
 

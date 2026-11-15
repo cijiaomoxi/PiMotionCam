@@ -18,15 +18,16 @@ Written for users who already have a Raspberry Pi and want to install and run a 
 5. [Interface Tour](#5-interface-tour)
 6. [Detection Tuning in Depth](#6-detection-tuning-in-depth)
 7. [Recording, Loop Recording and Imaging](#7-recording-loop-recording-and-imaging)
-8. [Timelapse, Servo, Scheduled Commands, and Event Hooks](#8-timelapse-servo-scheduled-commands-and-event-hooks)
-9. [Complete Configuration Reference](#9-complete-configuration-reference)
-10. [API Reference](#10-api-reference)
-11. [Multiple Languages](#11-multiple-languages)
-12. [Version Management and Rollback](#12-version-management-and-rollback)
-13. [Packaging and Release](#13-packaging-and-release)
-14. [Native Acceleration](#14-native-acceleration)
-15. [Troubleshooting](#15-troubleshooting)
-16. [Security Recommendations](#16-security-recommendations)
+8. [Audio (since v2.8.0)](#8-audio-since-v280)
+9. [Timelapse, Servo, Scheduled Commands, and Event Hooks](#9-timelapse-servo-scheduled-commands-and-event-hooks)
+10. [Complete Configuration Reference](#10-complete-configuration-reference)
+11. [API Reference](#11-api-reference)
+12. [Multiple Languages](#12-multiple-languages)
+13. [Version Management and Rollback](#13-version-management-and-rollback)
+14. [Packaging and Release](#14-packaging-and-release)
+15. [Native Acceleration](#15-native-acceleration)
+16. [Troubleshooting](#16-troubleshooting)
+17. [Security Recommendations](#17-security-recommendations)
 
 ---
 
@@ -58,6 +59,7 @@ The official PiKrellCam's last commit dates to 2020. It was built on the legacy 
 - **Two parallel detection algorithms**: `far` (small, slow, distant targets) and `near` (large, close targets), each with independently tunable sensitivity.
 - **Pre-roll and post-roll**: the frames captured just before motion was detected are automatically included, so a target that walks in and out immediately is not missed.
 - **Event playback**: every event yields an MP4 recording, a full-frame thumbnail, and a cropped moving-object thumbnail.
+- **Sound in the recordings**: a microphone is captured into a ring buffer and muxed into the finished clip as an AAC track, in sync with the picture, detailed in [Section 8](#8-audio-since-v280).
 - **Self-managing disk usage**: the oldest recordings are deleted automatically once the size limit is exceeded.
 - **Timelapse**: capture frames on an interval and stitch them into an MP4 automatically.
 - **Servo pan/tilt**: automatic backend detection across RPi.GPIO, ServoBlaster, and lgpio, with position presets and angle limits.
@@ -212,7 +214,7 @@ Go to the **System** tab → **Upgrade and Password**:
 - The password is stored as `sha256:<hex>` in `web.password_hash` in `config.json` and survives restarts.
 - Once enabled, every page redirects to the login page, and unauthenticated `/api/` calls return `401` with `{"auth": true}`.
 
-> See [Section 15](#15-troubleshooting) if you forget the password.
+> See [Section 16](#16-troubleshooting) if you forget the password.
 
 ### 4.3 Select a Camera
 
@@ -269,6 +271,11 @@ The live picture is on the left; motion regions and region presets are on the ri
 - Above the picture are two dropdowns: **camera selection** and **capture path selection**, plus a "Switch" button.
 - Below the picture are four buttons: **Pause Detection**, **Pause Recording**, **Take Snapshot**, and **Restart Service**.
 - The OSD drawn over the picture is an HTML overlay and does not affect recording quality.
+- **Recording countdown**: while an event recording runs, the top-left of the picture shows `Recording 00:17` —
+  how many seconds are **left** before the clip ends (the earlier of `record.post_seconds` after the movement
+  stops and the `record.max_event_seconds` cap). When only the loop recorder is running, the same line shows the
+  time left in the current segment (`LOOP 00:14`). While movement keeps being detected the post-roll timer is
+  restarted, so the countdown jumps back up — that is expected.
 
 **Drawing detection regions on the preview** (the key interaction)
 
@@ -311,6 +318,7 @@ In the "Region Presets" panel, enter a name and click "Save Current as Preset" t
 
 - **Timelapse**: enter a period in seconds and click "Start"; "Hold" pauses frame capture; "End and Compose" turns the captured frames into an MP4.
 - **Loop Recording**: enable switch, segment length, disk usage cap (%), encoder quality CRF and a button to delete the loop footage, detailed in [Section 7.8](#78-loop-recording-since-v270).
+- **Audio (microphone)**: enable switch, microphone drop-down, sample rate, channel count and a live level meter, detailed in [Section 8](#8-audio-since-v280).
 - **Event Recordings**: lists every event; click an entry to view it; each entry has an "Archive to Remote" button on the right.
 - **Video Files** / **Snapshot Images**: two file lists you can open directly.
 - Three clear buttons at the top: **Clear Videos**, **Clear Snapshots**, and **Clear All**.
@@ -321,7 +329,7 @@ In the "Region Presets" panel, enter a name and click "Save Current as Preset" t
   - Weekdays accept `*`, `Mon-Fri`, `Mon,Wed`, and similar forms.
   - **An interval greater than 0 takes priority over the time**, meaning the command runs every N minutes.
 - **Command List**: a table of all scheduled commands, each of which can be enabled, disabled, or deleted; the "Reload" button re-reads both the configuration and `at-commands.conf`.
-- **Run Immediately**: type a command and run it right away; the output appears below (only [internal commands](#83-scheduled-commands) are supported).
+- **Run Immediately**: type a command and run it right away; the output appears below (only [internal commands](#93-scheduled-commands) are supported).
 
 ### 5.5 Servo
 
@@ -763,9 +771,243 @@ curl -X POST http://pi.local:8080/api/imaging -H 'Content-Type: application/json
 
 ---
 
-## 8. Timelapse, Servo, Scheduled Commands, and Event Hooks
+## 8. Audio (since v2.8.0)
 
-### 8.1 Timelapse
+Since v2.8.0 the recordings can carry sound. A microphone is captured continuously into a memory ring buffer, and
+when a recording is finished the matching piece of audio is muxed into the MP4 as an AAC track. Event recordings and
+loop segments both get an audio track.
+
+### 8.1 Overview
+
+The one thing worth understanding first is that **the audio track does not go into the encoder**. The obvious
+design — feeding ALSA straight into ffmpeg while the video is being recorded — is deliberately not used, because an
+event recording starts with a **pre-roll** (`record.pre_seconds`): the picture at the beginning of the clip is from
+several seconds ago, so the sound of that moment has to be just as old. Straight into the encoder, the pre-roll
+would carry the sound of the moment the recording started, and the two would drift apart.
+
+Instead the microphone is captured into a **memory ring buffer** all the time, and the audio is cut out of that
+buffer **after** the recording has been closed:
+
+| Stage | What happens |
+| --- | --- |
+| Capture | A resident `arecord` process writes raw PCM into the ring buffer. Every block is timestamped with the wall-clock moment it was read, minus its own duration. |
+| Recording | The camera streams the frames into ffmpeg exactly as before. **The audio is not part of that stream.** |
+| Slicing | When the recording is closed and the `moov` atom is complete, the audio of the recorded time window is cut out of the ring buffer. Parts the buffer does not cover are padded with silence. |
+| Muxing | A background thread runs `ffmpeg -c:v copy -c:a aac -b:a <bitrate>k -movflags +faststart` and replaces the video file in place. |
+
+Two details of the last step are worth keeping in mind:
+
+- **The video is not re-encoded.** ffmpeg copies the video stream unchanged (`-c:v copy`) and only encodes the audio
+  as AAC. AAC is used instead of the upstream's MP3 because MP4 supports AAC natively — no second container pass,
+  and browsers and phones play the result directly.
+- **The muxed file is written into the same directory as the video.** On the Raspberry Pi `/tmp` is a tmpfs while
+  the videos live on the SD card, and renaming a file across filesystems fails with `EXDEV`. If the mux fails, the
+  original video is left untouched and ffmpeg's error goes into the log.
+
+### 8.2 Hardware Requirements
+
+Any ALSA capture device works. In practice that is one of:
+
+- **The microphone built into a USB camera** — it sits on the same USB port as the camera, which is exactly the
+  device the automatic selection prefers.
+- **An external USB microphone or headset.**
+- **A USB sound card** with a microphone plugged into it.
+
+The device has to be enumerated as an ALSA capture device. Check that on the Raspberry Pi:
+
+```bash
+# every ALSA capture device on the machine
+arecord -l
+
+# is the USB device enumerated at all?
+lsusb
+```
+
+`arecord` comes with the `alsa-utils` package (`sudo apt-get install -y alsa-utils`).
+
+To test a device by hand, record a few seconds of raw PCM:
+
+```bash
+arecord -D plughw:3,0 -f S16_LE -r 16000 -c 1 -t raw /tmp/test.raw
+ls -l /tmp/test.raw
+```
+
+`arecord` **takes the device exclusively**: while it runs, nothing else may open the same capture device.
+
+A Raspberry Pi without any microphone is perfectly fine — the audio subsystem is off by default, and a missing
+microphone never affects the recording path.
+
+### 8.3 Enabling Audio
+
+**Web interface**: the **Media** tab → **Audio (microphone)** panel. Tick "Record audio together with the video",
+pick the microphone, the sample rate and the channel count, then click "Save audio settings". The change takes
+effect immediately — the capture is restarted on the spot, **no service restart is required**. The tag in the panel
+header shows the state: *Idle*, *Starting*, *Capturing* or *Unavailable*.
+
+**Command line**:
+
+```bash
+curl -X POST http://pi.local:8080/api/audio \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true}'
+```
+
+**Internal command**: `audio on`, `audio off` and `audio status` (usable from scheduled commands, the FIFO and
+`at-commands.conf`):
+
+```bash
+curl -X POST http://pi.local:8080/api/command \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "audio status"}'
+```
+
+### 8.4 Configuration Keys
+
+All audio settings live in the `record` section of `config.json`:
+
+| Key | Type | Default | Range |
+| --- | --- | --- | --- |
+| `record.audio_enabled` | bool | `false` | — |
+| `record.audio_device` | string | `"auto"` | `auto` / `hw:N,M` / `plughw:N,M` |
+| `record.audio_rate` | int | `16000` | 4000–48000 |
+| `record.audio_channels` | int | `1` | 1–2 |
+| `record.audio_bitrate` | int (kbps) | `64` | 16–256 (AAC bitrate) |
+| `record.audio_buffer_seconds` | int | `180` | 30–900 |
+
+The default is **off**: a machine without a microphone should not report an error all day.
+
+Two of the keys are not on the web panel and are set through the API or `config.json`:
+
+- `record.audio_bitrate` — the AAC bitrate of the track. 64 kbps is plenty for 16 kHz mono speech.
+- `record.audio_buffer_seconds` — how long the ring buffer keeps the audio. It decides **how far back the pre-roll
+  can reach** and whether a long event recording still has a complete track. 180 seconds at 16 kHz mono is about
+  5.8 MB of memory.
+
+### 8.5 API
+
+`GET /api/audio` returns the configuration, the runtime state, the live level and the list of capture devices:
+
+```bash
+curl -s http://pi.local:8080/api/audio | python3 -m json.tool
+```
+
+```json
+{
+  "state": "running",
+  "device": "plughw:3,0",
+  "rate": 16000,
+  "channels": 1,
+  "buffer_seconds": 180,
+  "level": 0.12,
+  "error": "",
+  "running": true,
+  "enabled": true,
+  "configured_device": "auto",
+  "bitrate": 64,
+  "devices": [
+    {"id": "hw:3,0", "plug_id": "plughw:3,0", "card": 3, "device": 0,
+     "name": "USB Audio [USB Audio]", "card_name": "CAM [WEB CAM]",
+     "usb": "usb-0000:01:00.0-1.3", "is_usb": true, "port": "1.3"}
+  ]
+}
+```
+
+`POST /api/audio` accepts `enabled`, `device`, `rate`, `channels`, `bitrate` and `buffer_seconds`. Out-of-range
+values are clamped (rate 4000–48000, channels at most 2, bitrate 16–256, buffer_seconds 30–900), a value that is
+not a number falls back to the default. The change is stored and **applied immediately** — the capture is restarted
+with the new parameters:
+
+```bash
+curl -X POST http://pi.local:8080/api/audio \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"device":"plughw:3,0","rate":16000,"channels":1,"bitrate":64,"buffer_seconds":180}'
+```
+
+`GET /api/state` carries the same information in its `audio` section.
+
+### 8.6 Device Selection
+
+With `record.audio_device` set to `auto`, the device is picked in this order:
+
+1. **The microphone on the same USB port as the camera.** A USB camera's own microphone sits on that very port, so
+   this is the device that belongs to the camera.
+2. **Any USB device.**
+3. **Any other sound card.**
+
+ALSA and sysfs spell the USB port differently (`usb-0000:01:00.0-1.3` versus `1-1.3`), so both are normalized to a
+port number (`1.3`) before they are compared.
+
+The microphone is started **before** the camera — the ring buffer should warm up immediately — but at that moment the
+USB port of the camera is not yet known. As soon as the camera is up, the selection is re-checked and switched to
+the microphone on the same port if there is one.
+
+**Choosing a microphone by hand**: the drop-down in the panel lists every ALSA capture device on the machine, and
+the API reports each of them with both ids (`hw:N,M` and `plughw:N,M`). This is how an external USB microphone is
+used instead of the one built into the camera:
+
+```bash
+# the device list with both ids
+curl -s http://pi.local:8080/api/audio | python3 -m json.tool | grep -A8 '"devices"'
+```
+
+**Sample rate and channels**: the default is 16000 Hz mono. The microphone of the USB camera that was tested
+records natively in that format; 48 kHz stereo is rejected by the device itself. The capture always runs through
+the `plughw:` plugin, which converts any rate — so with `plughw:` even a rate the hardware does not support works.
+
+### 8.7 How the Audio and the Picture Stay in Sync
+
+| Point | How it is determined |
+| --- | --- |
+| **Start of the track** | For an event recording: the moment of the **earliest frame in the pre-roll buffer**, so the pre-roll section carries the sound that belongs to it. For a loop segment: the moment the segment started. |
+| **End of the track** | From the **video's own timeline**: frame count ÷ the frame rate the encoder really used. The wall clock at the moment ffmpeg finished is *not* used — closing the encoder takes a few hundred milliseconds up to a second, and the track would end up nearly a second longer than the picture. |
+| **Gaps** | Filled with **silence**, never shifted. If the ring buffer does not cover the whole window (the buffer is too short, or the microphone was restarted in between), the missing part is silence. A silent beginning is better than a track that drifts away from the picture. |
+
+If the window falls completely outside the buffer, no audio track is added at all — an empty track is worse than none.
+
+The muxing runs in a background thread (`pkc-audio-mux`) with its own queue: the capture thread feeds a single
+encoder and must not be blocked, so the ffmpeg run happens after the recording has been closed.
+
+### 8.8 Limits and Caveats
+
+- **No live audio in the browser.** The upstream's `www/audio_stream.php` (listening to the live audio in the web
+  interface) is not implemented.
+- **No audio-triggered recording.** The upstream's `audio_trigger_video` / `audio_trigger_level` are separate
+  subsystems and are not implemented either.
+- **No gain setting.** The upstream's `audio_gain_dB` has no counterpart here: the gain is a property of the device
+  and is set with `alsamixer`.
+- **MP4 with AAC, always.** The upstream's `box_MP3_only` is not implemented; the output is always MP4 with an AAC
+  track.
+- **The microphone is exclusive.** `arecord` takes the device exclusively, so no other program (a player, a voice
+  assistant) may hold it while the service runs.
+- **The ring buffer lives in memory** — about 5.8 MB for the default 180 seconds at 16 kHz mono.
+- **Timelapse videos have no audio track.** Only event recordings and loop segments are muxed.
+
+### 8.9 Common Problems
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `arecord -l` shows no device | The device was not enumerated (USB not seated properly, or no power). Check `lsusb` first: if the device is not there at all, it is a hardware problem, not a configuration one. |
+| A device is selected but there is no sound | Watch the level meter on the panel — it shows the RMS level of the last captured block, mapped from -60 dBFS to 0 dBFS onto 0…1. A level that stays at 0 means the wrong capture device or a muted one; check with `alsamixer`. |
+| The sample rate is rejected | Use `plughw:` instead of `hw:` — the plugin converts the rate for the hardware. |
+| The device is busy | `arecord` takes the device exclusively. Close the other programs holding it (a player, a voice assistant). |
+| The recording has no audio track | Check that audio is enabled and that the capture is really running (the state tag on the panel). A recording whose window lies completely outside the ring buffer gets no track at all — make `record.audio_buffer_seconds` larger. |
+
+```bash
+# what the service sees
+curl -s http://pi.local:8080/api/audio | python3 -m json.tool
+
+# who is holding the sound card
+lsof /dev/snd/*
+
+# the microphone messages in the log (the service logs them in Chinese)
+journalctl _SYSTEMD_USER_UNIT=pikrellcam-lite.service -f | grep -i "麦克风\|音轨"
+```
+
+---
+
+## 9. Timelapse, Servo, Scheduled Commands, and Event Hooks
+
+### 9.1 Timelapse
 
 **Configuring it**: the timelapse panel in the **Media** tab, or **Detection Tuning** → Timelapse Parameters (default period, start in hold mode).
 
@@ -793,7 +1035,7 @@ curl -X POST http://pi.local:8080/api/timelapse \
 
 `action` accepts `start` (optionally with `period`), `hold` (optionally with `on`), and `end`.
 
-### 8.2 Servo
+### 9.2 Servo
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
@@ -820,7 +1062,7 @@ curl -X POST http://pi.local:8080/api/servo \
 
 `action` accepts `enable`, `disable`, `goto` (with `name`), `set` (with `pan`/`tilt`/`smooth_ms`), `save_position`, and `delete_position`.
 
-### 8.3 Scheduled Commands
+### 9.3 Scheduled Commands
 
 There are three equivalent ways to configure them.
 
@@ -837,7 +1079,7 @@ Mon 7:30 "record on"
 
 The format is `<weekday> <time or interval in minutes> "<command>"`. Weekdays accept `*`, `Mon-Fri`, `Mon,Wed`; a time without a `:` is treated as a fixed interval in minutes. Commands starting with `@` are handed to the internal command handler; anything else is processed as an ordinary command.
 
-> **Note: the scheduler only executes the internal commands listed above.** An unrecognized command returns `unknown command: …` and is **not** run as a shell command. To run an arbitrary shell command, use an [event hook](#84-event-hooks) instead.
+> **Note: the scheduler only executes the internal commands listed above.** An unrecognized command returns `unknown command: …` and is **not** run as a shell command. To run an arbitrary shell command, use an [event hook](#94-event-hooks) instead.
 
 **(c) FIFO**: external scripts can write commands into `~/.pikrellcam/commands.fifo` (no `@` prefix needed):
 
@@ -856,6 +1098,7 @@ echo "record off" > ~/.pikrellcam/commands.fifo
 | `tl_hold on` / `tl_hold off` | Hold / resume frame capture |
 | `tl_end` | End the timelapse and compose the video |
 | `loop on` / `loop off` / `loop status` | Switch loop recording on / off / show its state |
+| `audio on` / `audio off` / `audio status` | Switch the microphone on / off / show its state and level. See [Section 8.3](#83-enabling-audio). |
 | `imaging` | Show the active imaging path and a few current values (read-only) |
 | `motion_enable on` / `off` / `toggle` | Turn motion detection on / off / toggle |
 | `motion load_regions <name>` | Load a named region preset |
@@ -875,7 +1118,7 @@ curl -X POST http://pi.local:8080/api/command \
   -d '{"command": "record on"}'
 ```
 
-### 8.4 Event Hooks
+### 9.4 Event Hooks
 
 Configure the four hooks in the **System** tab → **Event Hooks**:
 
@@ -913,11 +1156,11 @@ Hooks run in their own thread with a 120-second timeout per execution. The execu
 
 ---
 
-## 9. Complete Configuration Reference
+## 10. Complete Configuration Reference
 
-The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 configuration keys** across 10 top-level sections. The defaults below match `DEFAULT_CONFIG` in `core/config.py` exactly.
+The configuration file lives at `~/pikrellcam-lite/config.json` and holds **69 configuration keys** across 10 top-level sections. The defaults below match `DEFAULT_CONFIG` in `core/config.py` exactly.
 
-### 9.1 camera — Capture
+### 10.1 camera — Capture
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -937,7 +1180,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `camera.ae_constraint` | `normal` | AE metering mode: `normal` (full frame) / `highlight` / `shadows` / `custom`. Note that `highlight` makes the picture noticeably darker. |
 | `camera.imaging.*` | see below | The imaging parameter matrix (14 parameters): `brightness` / `contrast` / `saturation` / `sharpness` / `denoise` / `exposure` / `metering` / `ev` / `iso` / `shutter` / `awb` / `awb_r_gain` / `awb_b_gain` / `zoom`. Ranges and semantics are listed in [Section 7.9](#79-imaging-parameter-matrix-since-v270). |
 
-### 9.2 motion — Detection
+### 10.2 motion — Detection
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -956,7 +1199,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `motion.regions` | 1 region | Array of motion regions, each `{name, x, y, w, h, enabled}`, with coordinates normalized to 0–1. The default is a single region named "全画面" covering the whole frame (`x=0, y=0, w=1, h=1`). |
 | `motion.region_presets` | `{}` | Named region presets, mapping a name to an array of regions. |
 
-### 9.3 record — Recording
+### 10.3 record — Recording
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -971,8 +1214,14 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `record.frame_write_timeout` | `8` | Longest wait, in seconds, for one frame to reach the encoder. On timeout the encoder is treated as stuck: the recording is abandoned and the service keeps running. |
 | `record.encoder_close_timeout` | `15` | Longest wait, in seconds, for ffmpeg to finish writing the `moov` atom when a recording ends. |
 | `record.encoder_cooldown` | `60` | Seconds to stop trying to record after the encoder got stuck, so every motion event does not wait for a timeout. |
+| `record.audio_enabled` | `false` | Whether the microphone is captured and the audio track is muxed into the recordings. Off by default, so a machine without a microphone does not report an error all day. |
+| `record.audio_device` | `auto` | Capture device: `auto` / `hw:N,M` / `plughw:N,M`. With `auto` the microphone on the same USB port as the camera is preferred. |
+| `record.audio_rate` | `16000` | Sample rate in Hz (4000–48000). |
+| `record.audio_channels` | `1` | Channel count: 1 (mono) or 2 (stereo). |
+| `record.audio_bitrate` | `64` | AAC bitrate of the track in kbps (16–256). |
+| `record.audio_buffer_seconds` | `180` | How long the ring buffer keeps the audio (30–900). It decides how far back the pre-roll can reach and whether a long event recording still has a complete track. See [Section 8.4](#84-configuration-keys). |
 
-### 9.3.1 loop — Loop recording
+### 10.3.1 loop — Loop recording
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -982,7 +1231,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `loop.dir` | `loop` | Directory for the loop footage (a sub-directory of the media folder). |
 | `loop.quality` | `26` | CRF of the loop recording (10–40). |
 
-### 9.4 timelapse — Timelapse
+### 10.4 timelapse — Timelapse
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -990,7 +1239,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `timelapse.period` | `30` | Default capture interval in seconds. |
 | `timelapse.hold` | `false` | Whether to start in hold mode (no frames captured while held). |
 
-### 9.5 web — Interface and Security
+### 10.5 web — Interface and Security
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1001,7 +1250,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `web.show_vectors` | `false` | Whether motion vectors are shown (for debugging). **The current version does not wire this switch up**; the key is retained only for compatibility with the official configuration layout. |
 | `web.language` | `auto` | Interface language: `auto` (picked from the browser's `Accept-Language` header) / `zh-CN` / `en-US`. |
 
-### 9.6 media — Media Directories
+### 10.6 media — Media Directories
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1010,7 +1259,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `media.fallback_internal` | `false` | Whether to fall back to the internal storage when the external storage is unavailable; `false` pauses recording and warns instead. |
 | `media.archive_target` | `""` | Remote archive target in the form `user@host:/path`. |
 
-### 9.7 servo — Servo
+### 10.7 servo — Servo
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1025,7 +1274,7 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `servo.smooth_ms` | `0` | Smoothing time in milliseconds; `0` means jump straight to the target. |
 | `servo.positions` | 3 presets | Position preset list, `[{name, pan, tilt}]`; an existing name is overwritten. The three defaults are named "左", "中", and "右" with pan angles of 30°, 90°, and 150°, all at a tilt angle of 90°. |
 
-### 9.8 hooks — Event Hooks
+### 10.8 hooks — Event Hooks
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1034,19 +1283,19 @@ The configuration file lives at `~/pikrellcam-lite/config.json` and holds **63 c
 | `hooks.on_motion_preview_save` | `""` | Command run after the recording and thumbnails are saved successfully. |
 | `hooks.on_timelapse_end` | `""` | Command run after the timelapse ends and is composed. |
 
-### 9.9 schedules — Scheduled Commands
+### 10.9 schedules — Scheduled Commands
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `schedules` | `[]` | Array of scheduled commands. Each entry has `days` (weekday), `time` (`HH:MM`), `interval_minutes` (fixed interval in minutes, takes priority when greater than 0), `command`, and `enabled`. |
 
-### 9.10 presets — Configuration Presets
+### 10.10 presets — Configuration Presets
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `presets` | `{}` | Named configuration presets, each holding a fragment of the configuration. Activating one merges it into the current configuration; if the resolution or frame rate changes, capture restarts automatically. |
 
-### 9.11 Editing the Configuration by Hand
+### 10.11 Editing the Configuration by Hand
 
 ```bash
 # Change the port
@@ -1063,16 +1312,16 @@ The service hot-reloads the configuration file (scheduled commands and region pr
 
 ---
 
-## 10. API Reference
+## 11. API Reference
 
-There are **58 HTTP endpoints** in total: 53 `/api/*` endpoints plus 5 page and static-file routes. Once password protection is enabled, every `/api/` endpoint except `/api/auth`, `/api/auth/login`, and `/login` returns `401` when unauthenticated.
+There are **60 HTTP endpoints** in total: 55 `/api/*` endpoints plus 5 page and static-file routes. Once password protection is enabled, every `/api/` endpoint except `/api/auth`, `/api/auth/login`, and `/login` returns `401` when unauthenticated.
 
-### 10.1 Read-Only Endpoints
+### 11.1 Read-Only Endpoints
 
 | Method | Path | Returns | Purpose |
 | --- | --- | --- | --- |
 | GET | `/api/auth` | `{required, authenticated}` | Whether a password is required and whether you are logged in. |
-| GET | `/api/state` | state object | Runtime state, detection result, media statistics, current version, camera info, release info. |
+| GET | `/api/state` | state object | Runtime state, detection result, media statistics, current version, camera info, release info, audio state. |
 | GET | `/api/config` | configuration object | The full merged configuration, as in `config.json`. |
 | GET | `/api/cameras` | `{cameras, current, format, active}` | All available cameras (CSI and USB) plus the current selection. |
 | GET | `/api/regions` | `{regions, presets}` | Motion regions and region presets. |
@@ -1093,10 +1342,11 @@ There are **58 HTTP endpoints** in total: 53 `/api/*` endpoints plus 5 page and 
 | GET | `/api/loop` | state object | Loop recording state (`enabled`/`recording`/`yielded`/`paused`/`segments`/`bytes`/`limit_bytes`/`dir`/`fps`). |
 | GET | `/api/imaging` | `{values, schema, backend, supported, requires_restart}` | Current imaging values, the parameter schema, the active capture path and what it supports. |
 | GET | `/api/storage` | `{ok, storage}` | The detected storage devices and the current storage state. |
+| GET | `/api/audio` | status object | Audio state: `enabled`, `state`, `device`, `running`, `level`, `error`, `rate`, `channels`, `bitrate`, `buffer_seconds`, `configured_device` and the list of capture devices. See [Section 8.5](#85-api). |
 | GET | `/snapshot.jpg` | JPEG | The most recent frame as a still image. |
 | GET | `/video_feed` | multipart stream | The MJPEG live preview stream. |
 
-### 10.2 Write Endpoints
+### 11.2 Write Endpoints
 
 | Method | Path | Request body | Purpose |
 | --- | --- | --- | --- |
@@ -1127,8 +1377,9 @@ There are **58 HTTP endpoints** in total: 53 `/api/*` endpoints plus 5 page and 
 | POST | `/api/hooks` | `{"on_motion_begin": "...", ...}` | Update the hook commands. |
 | POST | `/api/i18n` | `{"language": "en-US"}` | Switch the interface language and persist it to `config.json`. |
 | POST | `/api/upgrade` | none | Run `git pull --ff-only` and restart the service. Returns an error if the deployment directory is not a git repository. |
+| POST | `/api/audio` | `{"enabled": true, "device": "plughw:3,0", "rate": 16000, "channels": 1, "bitrate": 64, "buffer_seconds": 180}` | Update the audio settings. Out-of-range values are clamped (rate 4000–48000, channels at most 2, bitrate 16–256, buffer_seconds 30–900) and the change is applied immediately. See [Section 8.5](#85-api). |
 
-### 10.3 Media Endpoints
+### 11.3 Media Endpoints
 
 | Method | Path | Request body | Purpose |
 | --- | --- | --- | --- |
@@ -1138,14 +1389,14 @@ There are **58 HTTP endpoints** in total: 53 `/api/*` endpoints plus 5 page and 
 | POST | `/api/archive` | `{"id": "20261111_203015"}` | `scp` the event recording to `media.archive_target`. |
 | POST | `/api/storage` | `{"dir": "/media/pi/USB", "require_mount": true, "fallback_internal": false}` | Switch the recording storage target. Answers `400` with the reason when the target is not a real mount point. |
 
-### 10.4 Page Routes
+### 11.4 Page Routes
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/` | The main management interface. |
 | GET | `/login` | The login page. |
 
-### 10.5 Example Calls
+### 11.5 Example Calls
 
 ```bash
 # Check the state
@@ -1170,11 +1421,11 @@ curl -s http://pi.local:8080/api/videos | python3 -m json.tool
 
 ---
 
-## 11. Multiple Languages
+## 12. Multiple Languages
 
 As of v2.5.0 the interface supports Simplified Chinese and English, and you can switch at any time.
 
-### 11.1 Switching Languages
+### 12.1 Switching Languages
 
 **Method 1: the language dropdown in the top bar.** The change takes effect immediately, **with no service restart**.
 
@@ -1213,7 +1464,7 @@ curl -X POST http://pi.local:8080/api/i18n \
 
 The response to `POST /api/i18n` contains `language`, `available`, and `strings`. Passing an unregistered language code returns `400` with an error message; passing `auto` re-resolves the language against the current request's `Accept-Language` header.
 
-### 11.2 Language Pack Files
+### 12.2 Language Pack Files
 
 Language packs live in the `core/locales/` directory as flat JSON dictionaries:
 
@@ -1233,7 +1484,7 @@ The structure looks like this:
 
 The same pack is shared by the front end and the back end: the back end uses it to translate the messages it generates, and the front end fetches the whole pack through `GET /api/i18n` and substitutes the keys in the browser. Missing keys are filled in automatically from the fallback language (Simplified Chinese), so nothing ever renders blank.
 
-### 11.3 Adding a New Language
+### 12.3 Adding a New Language
 
 1. Copy `core/locales/zh-CN.json` to a new language code, for example `ja-JP.json`, and translate the strings.
 2. Register it in the `LANGUAGES` dictionary in `core/i18n.py`:
@@ -1252,9 +1503,9 @@ LANGUAGES: dict[str, dict[str, str]] = {
 
 ---
 
-## 12. Version Management and Rollback
+## 13. Version Management and Rollback
 
-### 12.1 Directory Layout
+### 13.1 Directory Layout
 
 ```
 ~/pikrellcam-lite/
@@ -1279,7 +1530,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
 
 Upgrading and rolling back therefore **never lose recordings and never lose settings**, and each version does not write its own copy of the data.
 
-### 12.2 Publishing a New Version
+### 13.2 Publishing a New Version
 
 Run this on your **development machine** (`PKC_HOST` and `PKC_KEY` can be overridden with environment variables):
 
@@ -1310,7 +1561,7 @@ What `deploy.sh` does:
 
 **Nothing is ever overwritten**: release directory names are precise to the minute, and republishing within the same minute automatically appends `-r2` or `-r3` so that historical versions stay intact.
 
-### 12.3 Manual Rollback
+### 13.3 Manual Rollback
 
 ```bash
 # Run this on the Raspberry Pi
@@ -1318,24 +1569,24 @@ ln -sfn releases/20261110-2327-v2.4.0 ~/pikrellcam-lite/current
 systemctl --user restart pikrellcam-lite.service
 ```
 
-### 12.4 Checking Version Information
+### 13.4 Checking Version Information
 
 - Web interface: the **System** tab → **Version and Release**.
 - API: `GET /api/release` returns `{version, release, current, releases, root}`.
 - Command line: `bash deploy.sh --list`.
 
-### 12.5 First-Time Install versus Versioned Publishing
+### 13.5 First-Time Install versus Versioned Publishing
 
 - **First-time install**: copy the source to the Raspberry Pi and run `bash ~/pikrellcam-lite/install.sh`. The script performs the installation and publishes the first version at the same time.
 - **Later upgrades**: always publish with `deploy.sh`. Editing code directly on the Raspberry Pi means the next publish will overwrite it.
 
 ---
 
-## 13. Packaging and Release
+## 14. Packaging and Release
 
 As of v2.5.0 the repository ships a packaging script that produces the complete archive needed for a GitHub Release.
 
-### 13.1 Generate the Archive
+### 14.1 Generate the Archive
 
 Run this in the project root:
 
@@ -1354,7 +1605,7 @@ The generated archive contains:
 | License and changelog | `LICENSE`, `CHANGELOG.md` |
 | Checksum | A SHA-256 checksum file for the archive, so downloads can be verified for integrity |
 
-### 13.2 Publish to a GitHub Release
+### 14.2 Publish to a GitHub Release
 
 ```bash
 # 1. Tag and push
@@ -1371,7 +1622,7 @@ gh release create v2.5.0 ./dist/pikrellcam-lite-v2.5.0.tar.gz \
   --notes "Bilingual interface (Chinese/English), packaging script, detection and recording stability improvements"
 ```
 
-### 13.3 How Users Install a Release
+### 14.3 How Users Install a Release
 
 After publishing to GitHub, users download the archive, extract it, and follow [Section 3](#3-installation):
 
@@ -1384,9 +1635,9 @@ bash install.sh
 
 ---
 
-## 14. Native Acceleration
+## 15. Native Acceleration
 
-### 14.1 What It Is
+### 15.1 What It Is
 
 pikrellcam-lite moves the three most expensive stages of the frame-processing chain out of Python/numpy and into C:
 
@@ -1400,7 +1651,7 @@ The source lives in `core/_pkc_native.c` and compiles to `core/_libpkc.so`, whic
 
 **Acceleration is optional**: if the compiled library is missing, fails to load, or is incompatible with the platform, the service automatically falls back to the pure Python + numpy implementation, with **identical functionality and only lower speed**.
 
-### 14.2 Compiling
+### 15.2 Compiling
 
 ```bash
 # Compile in a version directory (the output goes to core/_libpkc.so)
@@ -1414,7 +1665,7 @@ You need `gcc` and `libjpeg62-turbo-dev` (the script installs the latter automat
 
 Both `install.sh` and `deploy.sh` run this step for you.
 
-### 14.3 Checking the Active Backend
+### 15.3 Checking the Active Backend
 
 ```bash
 # Method 1: look at the log
@@ -1427,7 +1678,7 @@ cd ~/pikrellcam-lite/current
 
 `native` means the C kernel is in use; `python` means the service is running in fallback mode. The log also contains `native acceleration enabled (...)` or `native acceleration unavailable, falling back to pure python`.
 
-### 14.4 Turning Native Acceleration Off
+### 15.4 Turning Native Acceleration Off
 
 To disable acceleration temporarily for comparison or troubleshooting, set the `PKC_NO_NATIVE=1` environment variable:
 
@@ -1455,7 +1706,7 @@ systemctl --user restart pikrellcam-lite.service
 
 To restore it, remove that block and run `daemon-reload` plus `restart` again.
 
-### 14.5 Performance Reference
+### 15.5 Performance Reference
 
 Raspberry Pi 4, 1280x720, detection resolution 320x180:
 
@@ -1472,9 +1723,9 @@ The C kernel was compared bit for bit against the pure Python implementation: fr
 
 ---
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
-### 15.1 Black Screen
+### 16.1 Black Screen
 
 1. **Confirm the camera is detected**: `libcamera-hello --list-cameras` (CSI) or `v4l2-ctl --list-devices` (USB).
 2. **Confirm the right device is selected**: the **System** tab → **Camera**, and check the backend and format shown in the camera details.
@@ -1482,21 +1733,21 @@ The C kernel was compared bit for bit against the pure Python implementation: fr
 4. **Read the log**: `journalctl _SYSTEMD_USER_UNIT=pikrellcam-lite.service -f`, and search for `error`.
 5. **Camera frontend timeout** (the log shows `Camera frontend has timed out!`): the sensor is hung and **must be reset by cutting power** — unplug the power for 10 seconds and plug it back in. A Raspberry Pi `reboot` does not cut the 3.3V rail, so rebooting does not help.
 
-### 15.2 Picture Frozen
+### 16.2 Picture Frozen
 
 1. **Wait a moment**: the service includes a frame-fetch watchdog (rebuilds the pipeline after 8 seconds without a new frame by default) plus automatic degradation, so it usually recovers on its own within seconds.
 2. **Look for degradation messages in the log**: "连续 N 次取帧失败，降级分辨率至 …", "降级帧率至 …", and "回退到 RGB888 采集通路".
 3. **Reset manually**: under **System** → **Camera**, click "Switch" to rebuild the pipeline, or click "Restart Service".
 4. **Make sure nothing else holds the camera**: `ps aux | grep -E 'rpicam|libcamera|ffmpeg'`.
 
-### 15.3 Picture Looks Purple or Otherwise Off-Color
+### 16.3 Picture Looks Purple or Otherwise Off-Color
 
 1. **Re-seat the ribbon with the power off**: a loose or reversed ribbon shifts the color channels. Always power down first.
 2. **Compare capture paths**: the ISP hardware JPEG and raw RGB paths differ in how the ISP processes the image, which quickly tells you whether the problem is path-specific.
 3. **Check the camera module**: non-official or clone modules often lack correct ISP tuning, and the colors are noticeably off.
 4. **Reduce the impact of compression**: raising `camera.jpeg_quality` to 85 or above reduces the color banding caused by compression.
 
-### 15.4 No Recordings Are Being Produced
+### 16.4 No Recordings Are Being Produced
 
 Check in this order:
 
@@ -1511,7 +1762,7 @@ Check in this order:
 6. **Read the log**: `journalctl _SYSTEMD_USER_UNIT=pikrellcam-lite.service -f | grep -i "ffmpeg\|event"`.
 7. **Confirm events are actually triggering**: the bottom-left OSD on the Live Preview tab shows the matched algorithm, region, and change ratio.
 
-### 15.5 The Port Is Already in Use
+### 16.5 The Port Is Already in Use
 
 ```bash
 # See who holds port 8080
@@ -1525,7 +1776,7 @@ Two ways forward:
 - Stop the process that holds the port.
 - Change the port: edit `web.port` in `~/pikrellcam-lite/config.json`, then run `systemctl --user restart pikrellcam-lite.service`.
 
-### 15.6 The Camera Is in Use by Another Process
+### 16.6 The Camera Is in Use by Another Process
 
 The log shows `Pipeline handler in use by another process`, meaning another process holds the camera:
 
@@ -1539,7 +1790,7 @@ pkill -f rpicam-vid
 
 Common culprits: the official camera application, a manual `rpicam-vid` test, or a second pikrellcam-lite instance.
 
-### 15.7 Permission Problems
+### 16.7 Permission Problems
 
 | Symptom | Fix |
 | --- | --- |
@@ -1548,7 +1799,7 @@ Common culprits: the official camera application, a manual `rpicam-vid` test, or
 | `~/.pikrellcam` permissions are too open | Run `chmod 700 ~/.pikrellcam` (the install script does this automatically). |
 | The servo does not move | Confirm the servo is enabled and that the GPIO pins are not used by anything else; on Pi 5 the `servoblaster` or `lgpio` backend is preferable. |
 
-### 15.8 Forgotten Password
+### 16.8 Forgotten Password
 
 The password hash lives in `web.password_hash` in `config.json`. Clearing it disables password protection:
 
@@ -1562,7 +1813,7 @@ EOF
 systemctl --user restart pikrellcam-lite.service
 ```
 
-### 15.9 Reading the Logs
+### 16.9 Reading the Logs
 
 ```bash
 # systemd live log (recommended)
@@ -1581,7 +1832,7 @@ systemctl --user restart pikrellcam-lite.service
 > On some systems `journalctl --user` is unavailable; use `journalctl _SYSTEMD_USER_UNIT=pikrellcam-lite.service` instead.
 > The **System** tab → **Live Log** panel shows the same content, refreshed every second.
 
-### 15.10 Other Common Symptoms
+### 16.10 Other Common Symptoms
 
 | Symptom | Explanation and fix |
 | --- | --- |
@@ -1589,11 +1840,12 @@ systemctl --user restart pikrellcam-lite.service
 | Constant triggers when the lights are switched | Frame differencing is sensitive to sudden lighting changes; raise the thresholds or increase `noise_filter`. |
 | Choppy preview, high latency | Lower `camera.fps`. A USB camera that only supports YUYV is transcoded in software, which costs more CPU. |
 | The USB camera is not listed | The libcamera stack in Debian 13 cannot enumerate USB devices; use the V4L2 backend and select `/dev/videoN` under "System → Camera". |
+| The recordings have no sound | The audio subsystem is off by default and the microphone must be switched on in the Media tab; see [Section 8.9](#89-common-problems) for the usual causes. |
 | The upgrade button reports an error | The deployment directory is not a git repository and cannot be upgraded online; publish with `deploy.sh` instead. |
 
 ---
 
-## 16. Security Recommendations
+## 17. Security Recommendations
 
 1. **Always set an access password.** After installing, set one under **System** → **Upgrade and Password**. The default configuration has **no** password protection.
 2. **Do not expose port 8080 directly to the public internet.** The service uses Flask's built-in server, with no TLS, no request rate limiting, and no CSRF protection.
@@ -1630,6 +1882,11 @@ libcamera-hello --list-cameras
 v4l2-ctl --list-devices
 v4l2-ctl -d /dev/video0 --list-formats-ext
 ps aux | grep -E 'rpicam-vid|libcamera' | grep -v grep
+
+# Audio (microphone)
+arecord -l                                          # the ALSA capture devices
+alsamixer                                           # the input level of the device
+curl -s http://pi.local:8080/api/audio | python3 -m json.tool
 
 # Version management (run on the development machine)
 bash deploy.sh

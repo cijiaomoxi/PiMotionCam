@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import threading
@@ -17,6 +18,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from .audio import mux_audio
 from .util import dir_size, jpeg_crop, jpeg_thumbnail
 
 try:
@@ -80,11 +82,14 @@ def _mp4_has_moov(path: Path) -> bool:
 
 
 class Recorder:
-    def __init__(self, config, state, on_event=None, log=None):
+    def __init__(self, config, state, on_event=None, log=None, audio=None):
         self.config = config
         self.state = state
         self.on_event = on_event          # 回调 (name, payload)
         self.log = log                    # 日志回调 (msg)
+        # 音频采集器（core.audio.AudioCapture）。为 None 时不做任何音频处理，
+        # 没有麦克风的机器上整个子系统就是关掉的。
+        self.audio = audio
         self._lock = threading.RLock()
         self._buffer: deque = deque()     # (ts, jpeg)
         self._proc: subprocess.Popen | None = None
@@ -120,6 +125,17 @@ class Recorder:
         self._loop_closed = 0
         self._loop_bytes = 0
         self._loop_scan_at = 0.0
+        # --- 音频（麦克风）---
+        # 音轨不直接进编码器（那样事件录像的"预录"段会没有声音、或者音画
+        # 错位），而是等录像收尾后按墙钟时间窗从环形缓冲切片再合流。
+        self._event_audio_start = 0.0
+        self._loop_audio_start = 0.0
+        # 编码器实际使用的帧率（视频时间轴的单位）。音轨终点按它换算，
+        # 音画才能严格对齐。
+        self._event_fps = 10
+        self._loop_fps = 10
+        self._mux_q: queue.Queue = queue.Queue()
+        self._mux_thread: threading.Thread | None = None
         # 实测"真正送进编码器"的帧率。
         #
         # 设备可能无视配置的帧率请求（USB 相机常见：配置 10fps 实给 30fps），
@@ -203,7 +219,9 @@ class Recorder:
         按配置值打时间戳会让视频时长和真实时间对不上（慢放/快放）。
         还没测到值时（例如刚启动）退回配置值。
         """
-        if self._rate_fps > 0:
+        # 实测值低于 2 fps 一律不信：那是摄像头刚出流时的噪声，
+        # 不是真实帧率（真按 1 fps 编码，视频会慢放十几倍）。
+        if self._rate_fps >= 2:
             return max(1, min(120, int(round(self._rate_fps))))
         return max(1, int(self.config.get("camera", "fps", default=10)))
 
@@ -246,10 +264,18 @@ class Recorder:
         """采集线程每帧调用。"""
         # 实测帧率：编码器按这个值给帧打时间戳。
         self._rate_frames += 1
+        if self._rate_frames == 1:
+            # 从**第一帧**开始计时。服务启动到摄像头出流之间可能隔十几秒，
+            # 拿那段空窗去算帧率会把结果压到 0.1 fps 以下，再被 max(1) 钳成
+            # 1 fps——整个事件视频就会慢放十几倍。
+            self._rate_mark = now
         el = now - self._rate_mark
         if el >= 2.0:
             # 2 秒窗口：比 1 秒稳，避免抖动把编码器的时间轴带偏。
-            self._rate_fps = self._rate_frames / el
+            # 帧数太少的窗口是噪声（摄像头刚出流），不能拿去喂编码器：
+            # 一旦被当成 1 fps，整个事件视频都会慢放一个数量级。
+            if self._rate_frames >= 5:
+                self._rate_fps = self._rate_frames / el
             self._rate_frames = 0
             self._rate_mark = now
         if self.config.get("record", "paused", default=False):
@@ -374,6 +400,12 @@ class Recorder:
         self._event_region = region
         self._event_bbox = bbox
         self._tmp.mkdir(parents=True, exist_ok=True)
+        # 音轨起点 = 预录缓冲里最早那一帧的时间。视频时间轴就是从这一帧
+        # 开始的，音频必须从同一个墙钟时刻切，否则音画错位。
+        if self._buffer:
+            self._event_audio_start = float(self._buffer[0][0])
+        else:
+            self._event_audio_start = now
 
         # 编码器刚刚卡死过：进入冷却期，不再反复尝试。否则每个运动事件都会
         # 白等一次写超时，采集线程会明显变慢。
@@ -387,6 +419,9 @@ class Recorder:
         out = self.config.media_sub("videos") / f"{self._event_id}.mp4"
         cmd, enc = self._encoder_cmd(out)
         self._encoder_name = enc
+        # 记下编码器实际用的帧率：音轨终点要按视频自己的时间轴算，
+        # 用的就是这个值（编码器中途不会换帧率）。
+        self._event_fps = max(1, self._video_fps())
         try:
             self._proc = self._spawn_encoder(cmd)
         except Exception as exc:  # noqa: BLE001
@@ -601,11 +636,84 @@ class Recorder:
             self._save_events()
         self.state.set("events_total", len(self._events))
         self.check_disk()
+        # 录像已收尾（moov 完整）→ 排一个音轨合流任务。
+        # 音轨终点按**视频自己的时间轴**算（帧数 ÷ 编码帧率），而不是收尾时的
+        # 墙钟：ffmpeg 收尾要花几百毫秒到一秒，用墙钟会让音轨比视频长一截。
+        fps = max(1, self._event_fps)
+        video_end = self._event_audio_start + (self._event_frames / fps)
+        self._queue_mux(video, self._event_audio_start, video_end)
         if self.on_event:
             try:
                 self.on_event("on_motion_end", {**entry, "ok": True})
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # 音频（麦克风）合流
+    #
+    # 音轨**不直接**送进编码器：那会让事件录像的"预录"段没有声音，而且
+    # 预录的画面是若干秒前的、声音却是当下的，音画直接错位。
+    #
+    # 做法：麦克风常驻采集到内存环形缓冲（core.audio.AudioCapture），
+    # 录像收尾时按**墙钟时间窗**切出对齐的一段 WAV，再用 ffmpeg 把音轨
+    # 合进已写好的 MP4（视频零重编码，只重编音频）。
+    #
+    # 合流放在后台线程里做：采集线程是单线程喂帧的，在它里面同步跑一次
+    # ffmpeg 会让画面卡住。
+    # ------------------------------------------------------------------
+    def _audio_enabled(self) -> bool:
+        if self.audio is None:
+            return False
+        try:
+            return bool(self.audio.running)
+        except Exception:
+            return False
+
+    def _queue_mux(self, path: Path, t0: float, t1: float) -> None:
+        """排队一个"给录像文件补音轨"的任务。"""
+        if not self._audio_enabled():
+            return
+        if not path.exists() or not t1 or t1 <= t0:
+            return
+        self._mux_q.put((str(path), float(t0), float(t1)))
+        self._ensure_mux_worker()
+
+    def _ensure_mux_worker(self) -> None:
+        th = self._mux_thread
+        if th is not None and th.is_alive():
+            return
+        self._mux_thread = threading.Thread(target=self._mux_loop,
+                                            name="pkc-audio-mux", daemon=True)
+        self._mux_thread.start()
+
+    def _mux_loop(self) -> None:
+        while True:
+            try:
+                job = self._mux_q.get(timeout=2.0)
+            except queue.Empty:
+                if not self._audio_enabled():
+                    return              # 音频关了，线程退出
+                continue
+            if job is None:
+                return
+            try:
+                self._mux_one(*job)
+            except Exception as exc:  # noqa: BLE001
+                self._log("音轨合流失败: %s" % exc)
+
+    def _mux_one(self, path: str, t0: float, t1: float) -> None:
+        wav = self.audio.slice_wav(t0, t1)
+        if not wav:
+            return
+        try:
+            bitrate = int(self.config.get("record", "audio_bitrate", default=64) or 64)
+        except (TypeError, ValueError):
+            bitrate = 64
+        p = Path(path)
+        if mux_audio(p, wav, bitrate, self._tmp, log=self.log):
+            self._log("已合入音轨：%s" % p.name)
+        else:
+            self._log("音轨合流失败（保留无声录像）：%s" % p.name)
 
     # ------------------------------------------------------------------
     # 循环录像（loop）
@@ -685,6 +793,8 @@ class Recorder:
         self._loop_active = True
         self._loop_id = name
         self._loop_start = now
+        self._loop_audio_start = now
+        self._loop_fps = max(1, self._video_fps())
         self._loop_frames = 0
         self._write_loop(frame)
         self.state.update(loop_recording=True)
@@ -739,6 +849,7 @@ class Recorder:
 
         name = self._loop_id
         self._loop_id = None
+        seg_frames = self._loop_frames
         self._loop_frames = 0
         if not name:
             return
@@ -759,6 +870,11 @@ class Recorder:
             self._loop_bytes += path.stat().st_size
         except OSError:
             pass
+        # 段已收尾（moov 完整）→ 排一个音轨合流任务。
+        # 终点同样按视频自己的时间轴算（帧数 ÷ 编码帧率），音画才严格对齐。
+        seg_fps = max(1, self._loop_fps)
+        seg_end = self._loop_audio_start + (seg_frames / seg_fps)
+        self._queue_mux(path, self._loop_audio_start, seg_end)
         self._loop_check_disk()
 
     def _oldest_loop_files(self) -> list[Path]:
@@ -899,6 +1015,52 @@ class Recorder:
             "limit_bytes": limit,
             "disk_total_bytes": int(total_bytes),
             "disk_free_bytes": int(free_bytes),
+        }
+
+    def record_status(self) -> dict:
+        """事件录像的实时进度——界面上的**录制倒计时**用这个。
+
+        一次事件录像什么时候结束，由两个条件共同决定，先到哪个算哪个：
+
+          * **补录**：最后一次检测到移动之后再录 ``post_seconds`` 秒；
+          * **单事件时长上限**：``max_event_seconds``。
+
+        界面上要显示的是"还剩几秒"，所以这里给的是**预计剩余时间**；
+        已录时长只作为附带信息（视频是含预录的，起点取预录缓冲里最早那一帧）。
+        """
+        now = time.time()
+        try:
+            post = float(self.config.get("record", "post_seconds", default=8) or 8)
+        except (TypeError, ValueError):
+            post = 8.0
+        try:
+            max_event = float(self.config.get("record", "max_event_seconds",
+                                             default=120) or 120)
+        except (TypeError, ValueError):
+            max_event = 120.0
+        with self._lock:
+            recording = bool(self._in_event)
+            elapsed = 0.0
+            remaining = None
+            if recording:
+                start = self._event_audio_start or self._event_start
+                elapsed = max(0.0, now - start)
+                deadline = min(self._last_motion_at + post,
+                               self._event_start + max_event)
+                remaining = max(0.0, deadline - now)
+            loop_recording = bool(self._loop_active)
+            loop_remaining = None
+            if loop_recording:
+                loop_remaining = max(0.0, self._loop_segment_seconds()
+                                     - (now - self._loop_start))
+        return {
+            "recording": recording,
+            "elapsed": round(elapsed, 1),
+            "remaining": round(remaining, 1) if remaining is not None else None,
+            "paused": bool(self.config.get("record", "paused", default=False)),
+            "loop_recording": loop_recording,
+            "loop_remaining": (round(loop_remaining, 1)
+                               if loop_remaining is not None else None),
         }
 
     def _crop_box(self, src: bytes, box) -> bytes | None:

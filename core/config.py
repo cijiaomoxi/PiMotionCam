@@ -110,6 +110,15 @@ DEFAULT_CONFIG = {
         "encoder": "auto",     # auto | h264_v4l2m2m | libx264
         "quality": 23,
         "paused": False,
+        # --- 音频（麦克风）---
+        # 键名沿用上游的命名思路（audio_enable / audio_device / audio_rate /
+        # audio_channels），默认关闭：没插麦的环境不该一直报错。
+        "audio_enabled": False,
+        "audio_device": "auto",     # auto | hw:N,M | plughw:N,M
+        "audio_rate": 16000,         # 采样率
+        "audio_channels": 1,         # 声道数
+        "audio_bitrate": 64,         # AAC 码率（kbps）
+        "audio_buffer_seconds": 180,  # 环形缓冲保留时长（秒）
     },
     "timelapse": {
         "enabled": False,

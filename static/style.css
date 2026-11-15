@@ -286,6 +286,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 18px; }
 .osd-line .ok { color: var(--ok); }
 .osd-line .bad { color: var(--bad); }
 .osd-line .warn { color: var(--warn); }
+/* 录制倒计时：事件录像红色醒目，循环段次要一些 */
+.osd-line.rec { color: #ff6b6b; font-weight: 600; }
+.osd-line.loop { color: #93a7c4; }
 
 .badge {
   display: inline-block;
@@ -495,3 +498,15 @@ td .acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .imgroup .cols { gap: 10px 16px; }
 /* 当前采集通路不支持的参数：置灰并禁用 */
 .field.dim { opacity: .42; }
+
+/* ---------------------------------------------------------------- 音频电平 */
+.meter {
+  height: 12px; border-radius: 6px; overflow: hidden;
+  background: var(--line); border: 1px solid var(--line);
+  margin-top: 6px;
+}
+.meter i {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, #3ddc84 0%, #f5c542 70%, #ff6b6b 100%);
+  transition: width .12s linear;
+}

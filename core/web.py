@@ -69,6 +69,10 @@ def create_app(service) -> Flask:
                 static_folder=str(APP_DIR / "static"))
     app.secret_key = os.urandom(24)
     app.config["SERVICE"] = service
+    # 静态资源不要缓存：Flask 默认给 12 小时（max-age=43200），升级之后
+    # 浏览器还会拿旧的 app.js / style.css，界面上的新功能死活不出现。
+    # 管理界面在内网、文件也不大，每次回源完全够用。
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
     # ------------------------------------------------------------------
     # 多语言
     # ------------------------------------------------------------------
@@ -228,6 +232,8 @@ def create_app(service) -> Flask:
         st["release"] = _release_info()
         st["storage"] = service.config.media_status()
         st["loop"] = service.recorder.loop_stats()
+        st["record"] = service.recorder.record_status()
+        st["audio"] = service.audio_status()
         return jsonify(st)
 
     @app.route("/api/config", methods=["GET"])
@@ -259,6 +265,50 @@ def create_app(service) -> Flask:
         service.config.reset()
         service._restart_camera()
         return jsonify({"ok": True, "config": service.config.snapshot()})
+
+    # ------------------------------------------------------------------
+    # 音频（麦克风）
+    # ------------------------------------------------------------------
+    @app.route("/api/audio", methods=["GET"])
+    def api_audio_get():
+        return jsonify(service.audio_status())
+
+    @app.route("/api/audio", methods=["POST"])
+    def api_audio_post():
+        data = request.get_json(silent=True) or {}
+        patch: dict = {}
+        if "enabled" in data:
+            patch["audio_enabled"] = bool(data["enabled"])
+        if "device" in data:
+            patch["audio_device"] = str(data["device"] or "auto")
+        if "rate" in data:
+            try:
+                rate = int(data["rate"])
+            except (TypeError, ValueError):
+                rate = 16000
+            patch["audio_rate"] = max(4000, min(48000, rate))
+        if "channels" in data:
+            try:
+                ch = int(data["channels"])
+            except (TypeError, ValueError):
+                ch = 1
+            patch["audio_channels"] = 1 if ch <= 1 else 2
+        if "bitrate" in data:
+            try:
+                br = int(data["bitrate"])
+            except (TypeError, ValueError):
+                br = 64
+            patch["audio_bitrate"] = max(16, min(256, br))
+        if "buffer_seconds" in data:
+            try:
+                buf = int(data["buffer_seconds"])
+            except (TypeError, ValueError):
+                buf = 180
+            patch["audio_buffer_seconds"] = max(30, min(900, buf))
+        if patch:
+            service.config.set({"record": patch})
+            service.apply_audio_config()
+        return jsonify({"ok": True, **service.audio_status()})
 
     # ------------------------------------------------------------------
     # 预览

@@ -76,6 +76,7 @@
           <div class="osd osd-tl">
             <div class="osd-line big" id="osd-time">--:--:--</div>
             <div class="osd-line"><span class="badge" id="osd-badge" data-i18n="state.still">静止</span></div>
+            <div class="osd-line" id="osd-rec"></div>
           </div>
           <div class="osd osd-tr">
             <div class="osd-line">FPS <b id="osd-fps">0</b></div>
@@ -310,6 +311,39 @@
       <span class="hint" id="loop-hint"></span>
     </div>
     <p class="hint" data-i18n="hint.loopYield"></p>
+  </div>
+
+  <div class="panel">
+    <h2><span data-i18n="panel.audio">音频（麦克风）</span> <span class="tag" id="audio-tag">–</span>
+      <span class="spacer"></span>
+      <span class="hint" id="audio-detail"></span>
+    </h2>
+    <div class="cols">
+      <label class="check"><input type="checkbox" id="audio-enabled">
+        <span data-i18n="label.audioEnabled">给录像加声音</span></label>
+      <label class="field"><span><span data-i18n="label.audioDevice">麦克风</span></span>
+        <select id="audio-device"></select></label>
+      <label class="field"><span><span data-i18n="label.audioRate">采样率</span></span>
+        <select id="audio-rate">
+          <option value="8000">8000 Hz</option>
+          <option value="16000">16000 Hz</option>
+          <option value="22050">22050 Hz</option>
+          <option value="32000">32000 Hz</option>
+          <option value="44100">44100 Hz</option>
+          <option value="48000">48000 Hz</option>
+        </select></label>
+      <label class="field"><span><span data-i18n="label.audioChannels">声道</span></span>
+        <select id="audio-channels">
+          <option value="1" data-i18n="audio.mono">单声道</option>
+          <option value="2" data-i18n="audio.stereo">立体声</option>
+        </select></label>
+      <label class="field"><span><span data-i18n="label.audioLevel">实时电平</span></span>
+        <div class="meter"><i id="audio-meter"></i></div></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btn-audio-save" class="primary" data-i18n="btn.saveAudio">保存音频设置</button>
+    </div>
+    <p class="hint" data-i18n="hint.audioBackend"></p>
   </div>
 
   <div class="panel">

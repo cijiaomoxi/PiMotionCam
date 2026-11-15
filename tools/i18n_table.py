@@ -625,6 +625,33 @@ EXTRA = {
     "loop.pausedHint": ("录像已暂停，循环录像不会开始",
                         "Recording is paused, so loop recording will not start"),
     "loop.fps": ("实际 {fps} fps", "actual {fps} fps"),
+    # ---- 音频（麦克风）----
+    "panel.audio": ("音频（麦克风）", "Audio (microphone)"),
+    "label.audioEnabled": ("给录像加声音", "Record audio together with the video"),
+    "label.audioDevice": ("麦克风", "Microphone"),
+    "label.audioRate": ("采样率", "Sample rate"),
+    "label.audioChannels": ("声道", "Channels"),
+    "label.audioLevel": ("实时电平", "Live level"),
+    "btn.saveAudio": ("保存音频设置", "Save audio settings"),
+    "audio.idle": ("未启用", "Idle"),
+    "audio.running": ("采集中", "Capturing"),
+    "audio.starting": ("启动中", "Starting"),
+    "audio.error": ("不可用", "Unavailable"),
+    "audio.detail": ("{device} · {rate} Hz · {ch}",
+                     "{device} · {rate} Hz · {ch}"),
+    "audio.noDevice": ("没有检测到可用的麦克风", "No usable microphone detected"),
+    "audio.auto": ("自动（优先用摄像头自带的）",
+                   "Auto (prefer the microphone of the camera)"),
+    "audio.mono": ("单声道", "Mono"),
+    "audio.stereo": ("立体声", "Stereo"),
+    "hint.audioBackend": (
+        "音频用 ALSA 采集，录成 AAC 音轨直接封进 MP4（视频不重编码）。"
+        "没有麦克风时这一项可以不管，录像照常工作。",
+        "Audio is captured through ALSA and muxed into the MP4 as an AAC track "
+        "(the video itself is not re-encoded). Without a microphone this section "
+        "can be ignored — recording works as usual."),
+    "toast.audioSaved": ("音频设置已保存", "Audio settings saved"),
+    "err.saveAudio": ("保存音频设置失败：", "Failed to save audio settings: "),
     "hint.loopYield": (
         "循环录像与事件录像共用同一个硬件编码器，不能同时录："
         "检测到移动时循环录像会让位给事件录像，事件结束后自动恢复。"
@@ -633,6 +660,9 @@ EXTRA = {
         "run at the same time: when motion is detected the loop yields to the event "
         "clip and resumes afterwards. When the usage cap is exceeded the oldest loop "
         "segments are deleted first; event recordings are never touched."),
+    # ---- 录制倒计时（OSD 叠加层）----
+    "osd.recording": ("录制中", "Recording"),
+    "osd.looping": ("循环段", "LOOP"),
 }
 
 

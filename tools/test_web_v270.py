@@ -137,6 +137,31 @@ class Service:
         self.hooks = types.SimpleNamespace(history=lambda: [], fire=lambda *a: None)
         self.storage = types.SimpleNamespace(status=lambda: {})
         self.log = lambda *a, **k: None
+        # 音频替身：只提供状态与"应用配置"这两个接口
+        self.audio = types.SimpleNamespace(
+            status=lambda: {"state": "idle", "device": "", "rate": 16000,
+                            "channels": 1, "level": 0.0, "error": "",
+                            "running": False},
+            stop=lambda: {})
+        self.audio_applied = 0
+
+    def audio_status(self):
+        # 真实服务里这些值来自采集器；替身直接读配置，效果一致
+        d = dict(self.audio.status())
+        d["enabled"] = bool(self.config.get("record", "audio_enabled", default=False))
+        d["configured_device"] = str(self.config.get("record", "audio_device",
+                                                     default="auto") or "auto")
+        d["rate"] = int(self.config.get("record", "audio_rate", default=16000) or 16000)
+        d["channels"] = int(self.config.get("record", "audio_channels", default=1) or 1)
+        d["bitrate"] = int(self.config.get("record", "audio_bitrate", default=64) or 64)
+        d["buffer_seconds"] = int(self.config.get("record", "audio_buffer_seconds",
+                                                default=180) or 180)
+        d["devices"] = []
+        return d
+
+    def apply_audio_config(self):
+        self.audio_applied += 1
+        return self.audio_status()
 
     def _restart_camera(self):
         self.camera.restart()
@@ -154,7 +179,7 @@ def main() -> int:
     app = create_app(svc)
     client = app.test_client()
 
-    print("pikrellcam-lite v2.7.0 本地接口集成测试")
+    print("pikrellcam-lite v2.8.0 本地接口集成测试")
 
     # ------------------------------------------------------------------
     print("\n[成像参数接口]")
@@ -219,6 +244,54 @@ def main() -> int:
     check("stop 动作关闭循环录像", r.get_json().get("enabled") is False, r.get_json())
 
     # ------------------------------------------------------------------
+    print("\n[音频接口]")
+    r = client.get("/api/audio")
+    check("GET /api/audio 返回 200", r.status_code == 200, str(r.status_code))
+    d = r.get_json()
+    for k in ("enabled", "state", "device", "rate", "channels", "level",
+              "devices", "configured_device", "bitrate"):
+        check("返回 " + k, k in d, list(d))
+    check("默认未启用音频", d.get("enabled") is False, d.get("enabled"))
+
+    r = client.post("/api/audio", json={"enabled": True, "rate": 48000,
+                                        "channels": 2, "device": "plughw:3,0"})
+    check("POST /api/audio 返回 200", r.status_code == 200, str(r.status_code))
+    d = r.get_json()
+    check("音频已启用", d.get("enabled") is True, d.get("enabled"))
+    check("采样率已保存", d.get("rate") == 48000, d.get("rate"))
+    check("声道数已保存", d.get("channels") == 2, d.get("channels"))
+    check("设备已保存", d.get("configured_device") == "plughw:3,0",
+          d.get("configured_device"))
+    check("应用配置被调用", svc.audio_applied == 1, svc.audio_applied)
+    check("配置里持久化了",
+          svc.config.get("record", "audio_enabled") is True,
+          svc.config.get("record", "audio_enabled"))
+
+    r = client.post("/api/audio", json={"rate": 999999, "channels": 9,
+                                        "bitrate": 9999})
+    d = r.get_json()
+    check("采样率被钳制到上限", d.get("rate") == 48000, d.get("rate"))
+    check("声道数被钳制到 2", d.get("channels") == 2, d.get("channels"))
+    check("码率被钳制到上限", d.get("bitrate") == 256, d.get("bitrate"))
+
+    r = client.post("/api/audio", json={"rate": "不是数字"})
+    check("非法采样率回落默认", r.get_json().get("rate") == 16000,
+          r.get_json().get("rate"))
+
+    r = client.post("/api/audio", json={"buffer_seconds": 99999})
+    check("缓冲时长被钳制到上限", r.get_json().get("buffer_seconds") == 900,
+          r.get_json().get("buffer_seconds"))
+    r = client.post("/api/audio", json={"buffer_seconds": 5})
+    check("缓冲时长被钳制到下限", r.get_json().get("buffer_seconds") == 30,
+          r.get_json().get("buffer_seconds"))
+    r = client.post("/api/audio", json={"buffer_seconds": 240})
+    check("缓冲时长已保存", r.get_json().get("buffer_seconds") == 240,
+          r.get_json().get("buffer_seconds"))
+    check("缓冲时长已持久化",
+          svc.config.get("record", "audio_buffer_seconds") == 240,
+          svc.config.get("record", "audio_buffer_seconds"))
+
+    # ------------------------------------------------------------------
     print("\n[状态接口]")
     r = client.get("/api/state")
     check("GET /api/state 返回 200", r.status_code == 200, str(r.status_code))
@@ -227,6 +300,23 @@ def main() -> int:
     check("state.loop.enabled 可读", d["loop"].get("enabled") is False, d["loop"])
     check("state.media 仍带磁盘字段", "disk_free_bytes" in d.get("media", {}),
           list(d.get("media", {})))
+
+    d = client.get("/api/state").get_json()
+    check("state 含 audio 段", "audio" in d, list(d))
+    check("state.audio 含运行状态",
+          isinstance(d.get("audio"), dict) and "state" in d.get("audio", {}),
+          str(d.get("audio")))
+    check("state 含 record 段（录制倒计时数据）", "record" in d, list(d))
+    rec = d.get("record") or {}
+    check("state.record 含录制标记", "recording" in rec, str(rec))
+    check("state.record 含剩余时间", "remaining" in rec, str(rec))
+    check("空闲时不在录制中", rec.get("recording") is False, str(rec))
+
+    # 静态资源不能缓存：否则升级后浏览器还拿旧的 app.js，界面上的新功能不出现
+    r = client.get("/static/app.js")
+    cc = (r.headers.get("Cache-Control") or "")
+    check("静态资源不缓存",
+          ("no-cache" in cc) or ("max-age=0" in cc) or ("no-store" in cc), cc)
 
     print("\n" + "=" * 52)
     print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))
