@@ -212,6 +212,9 @@ def create_app(service) -> Flask:
     def api_state():
         st = service.state.snapshot()
         cfg = service.config.snapshot()
+        # Runtime flags start empty after a restart; the saved setting is the
+        # authority for whether the recorder accepts frames.
+        st["record_paused"] = bool(cfg["record"].get("paused", False))
         media_dir = service.config.media_dir()
         inventory = media_stats.snapshot(media_dir)
         used_bytes = inventory["disk_bytes"]

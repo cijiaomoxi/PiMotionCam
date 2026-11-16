@@ -247,6 +247,19 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(list_media(self.root / "stills", ".jpg")[0]["name"], "a.jpg")
         self.assertEqual(list_media(self.root / "missing", ".jpg"), [])
 
+    def test_persisted_pause_overrides_initial_runtime_state(self):
+        from tools.test_web_v270 import Service
+        from core.web import create_app
+        with patch.object(config_mod, "ROOT_DIR", self.root):
+            service = Service(self.root)
+            client = create_app(service).test_client()
+            for paused in (True, False):
+                service.config.set({"record": {"paused": paused}})
+                service.state.update(record_paused=not paused)
+                state = client.get("/api/state").get_json()
+                self.assertEqual(state["record_paused"], paused)
+                self.assertEqual(state["record"]["paused"], paused)
+
     def test_api_schema_cache_and_write_invalidation(self):
         from tools.test_web_v270 import Service
         from core.web import create_app
