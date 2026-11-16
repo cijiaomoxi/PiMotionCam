@@ -1,0 +1,41 @@
+{
+  "snapshot_size": [
+    1280,
+    720
+  ],
+  "event_triggered": true,
+  "event_countdown": 9.7,
+  "loop_yielded_to_event": true,
+  "loop_resumed": true,
+  "event_video": {
+    "file": "20261115_120147.mp4",
+    "video_codec": "h264",
+    "audio_codec": "aac",
+    "video_duration": 17.6,
+    "audio_duration": 17.6,
+    "duration_difference": 0.0,
+    "width": 1280,
+    "height": 720,
+    "fps": "10/1",
+    "audio_rate": "16000",
+    "channels": 1,
+    "full_decode_errors": 0
+  },
+  "loop_video": {
+    "file": "loop_20261115_120138_0005.mp4",
+    "video_codec": "h264",
+    "audio_codec": "aac",
+    "video_duration": 8.1,
+    "audio_duration": 8.1,
+    "duration_difference": 0.0,
+    "width": 1280,
+    "height": 720,
+    "fps": "10/1",
+    "audio_rate": "16000",
+    "channels": 1,
+    "full_decode_errors": 0
+  },
+  "audio_running": true,
+  "version": "2.8.1",
+  "settings_restored": true
+}

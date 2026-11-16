@@ -64,23 +64,36 @@ fi
 echo "==> 打包 v${VERSION}"
 TARBALL="$(mktemp -t pkc-release)"
 trap 'rm -f "$TARBALL"' EXIT
-tar czf "$TARBALL" \
+COPYFILE_DISABLE=1 tar czf "$TARBALL" \
+  --exclude='./.venv' \
+  --exclude='./venv' \
+  --exclude='./releases' \
+  --exclude='./current' \
+  --exclude='./media' \
+  --exclude='./logs' \
   --exclude='./versions' \
   --exclude='./dist' \
+  --exclude='.DS_Store' \
+  --exclude='*.so' \
+  --exclude='*.o' \
   --exclude='__pycache__' \
   --exclude='*.pyc' \
-  --exclude='./deploy.sh' \
   -C "$HERE" .
 
 echo "==> 上传到 releases/${RELEASE}"
 "${SSH[@]}" "mkdir -p $REMOTE_ROOT/releases/${RELEASE}"
 "${SSH[@]}" "tar xzf - -C $REMOTE_ROOT/releases/${RELEASE}" < "$TARBALL"
 
+echo "==> 在新版本目录编译原生加速内核（当前服务继续运行）"
+"${SSH[@]}" "bash $REMOTE_ROOT/releases/${RELEASE}/build_native.sh --force" || \
+  echo "（原生内核编译失败，服务自动回落到纯 Python 实现）"
+
 echo "==> 更新 systemd 单元（让 ffmpeg 有机会正常收尾）"
 "${SSH[@]}" 'set -e
 U="$HOME/.config/systemd/user/pikrellcam-lite.service"
 mkdir -p "$(dirname "$U")"
 touch "$U"
+sed -i "s/^Description=.*/Description=PiMotionCam camera monitoring and recording/" "$U"
 if ! grep -q "^KillMode=mixed" "$U"; then
   if grep -q "^RestartSec=" "$U"; then
     sed -i "/^RestartSec=/a KillMode=mixed\nTimeoutStopSec=30" "$U"
@@ -103,11 +116,7 @@ echo "==> 切换 current 并重启"
   echo '已保留的版本:'; ls -1 $REMOTE_ROOT/releases | sort; \
   echo '服务状态:'; systemctl --user is-active pikrellcam-lite.service"
 
-echo "==> 编译原生加速内核"
-"${SSH[@]}" "bash $REMOTE_ROOT/current/build_native.sh --force" || \
-  echo "（原生内核编译失败，服务自动回落到纯 Python 实现）"
-"${SSH[@]}" "systemctl --user restart pikrellcam-lite.service; sleep 3; \
-  echo '服务状态:'; systemctl --user is-active pikrellcam-lite.service; \
+"${SSH[@]}" "echo '服务状态:'; systemctl --user is-active pikrellcam-lite.service; \
   echo '加速后端:'; $REMOTE_ROOT/venv/bin/python -c \"import sys;sys.path.insert(0,'$REMOTE_ROOT/current');from core import native;print(native.backend())\""
 
 echo

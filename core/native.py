@@ -1,4 +1,4 @@
-"""pikrellcam-lite 原生加速模块（ctypes 加载 libpkc.so）。
+"""PiMotionCam 原生加速模块（ctypes 加载 libpkc.so）。
 
 设计原则：**加速是可选的，不是必需的**。
 - 编译产物存在且能正常加载 → 走 C 内核；
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -102,10 +103,20 @@ def build(force: bool = False) -> tuple[bool, str]:
     cmd = [
         cc, "-O3", "-fPIC", "-shared",
         "-fno-strict-aliasing",
-        "-DPKC_VERSION_STR=\"pikrellcam-lite native %s\"" % _version(),
+        "-DPKC_VERSION_STR=\"PiMotionCam native %s\"" % _version(),
         "-o", str(_LIB), str(_SRC),
-        "-ljpeg",
+        "-ljpeg", "-lm",
     ]
+    # Debian's default include path works without pkg-config; this also finds
+    # Homebrew libjpeg on macOS, allowing the real C backend to run in tests.
+    try:
+        flags = subprocess.run(["pkg-config", "--cflags", "--libs", "libjpeg"],
+                               capture_output=True, text=True, timeout=5)
+        if flags.returncode == 0:
+            cmd.remove("-ljpeg")
+            cmd.extend(shlex.split(flags.stdout))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     # aarch64 上显式打开 NEON；其它架构交给编译器默认
     if platform_is_neon():
         cmd.insert(1, "-march=armv8-a+simd")
@@ -125,7 +136,7 @@ def build(force: bool = False) -> tuple[bool, str]:
 def platform_is_neon() -> bool:
     import platform
     mach = platform.machine().lower()
-    return mach.startswith("arm") or mach.startswith("aarch")
+    return mach in ("aarch64", "arm64")
 
 
 # ----------------------------------------------------------------------
@@ -209,8 +220,19 @@ def _ptr(arr: np.ndarray):
     return arr.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
 
 
+def _image(arr, shape):
+    """Validate the C ABI's size/dtype and copy strided views when necessary."""
+    if (not isinstance(arr, np.ndarray) or arr.dtype != np.uint8
+            or arr.shape != shape or any(s <= 0 for s in shape)):
+        return None
+    return np.ascontiguousarray(arr)
+
+
 def gray_ds(rgb: np.ndarray, w: int, h: int, tw: int, th: int) -> np.ndarray | None:
     """RGB888 -> (th, tw) uint8 灰度图。"""
+    rgb = _image(rgb, (h, w, 3))
+    if rgb is None or tw <= 0 or th <= 0:
+        return None
     if not ensure_built():
         return None
     lib = _load()
@@ -231,6 +253,9 @@ def detect(cur: np.ndarray, prev: np.ndarray, w: int, h: int,
         {x0, y0, x1, y1, mag_limit, noise_k, count_limit, consecutive, hit_count}
     返回与输入等长的结果列表；失败返回 None。
     """
+    cur, prev = _image(cur, (h, w)), _image(prev, (h, w))
+    if cur is None or prev is None:
+        return None
     if not ensure_built():
         return None
     lib = _load()
@@ -272,6 +297,9 @@ def detect(cur: np.ndarray, prev: np.ndarray, w: int, h: int,
 
 def jpeg(rgb: np.ndarray, w: int, h: int, quality: int) -> bytes | None:
     """RGB888 -> JPEG 字节。"""
+    rgb = _image(rgb, (h, w, 3))
+    if rgb is None:
+        return None
     if not ensure_built():
         return None
     lib = _load()

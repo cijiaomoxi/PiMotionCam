@@ -1,4 +1,4 @@
-"""pikrellcam-lite v2.8.0 音频子系统离线单元测试。
+"""PiMotionCam v2.8.0 音频子系统离线单元测试。
 
 覆盖：ALSA 设备解析、USB 口匹配（优先用摄像头自带的麦）、WAV 打包、
 环形缓冲按时间窗切片、电平换算、合流命令构造。
@@ -241,7 +241,7 @@ def test_status_shape() -> None:
 
 
 def main() -> int:
-    print("pikrellcam-lite v2.8.0 音频子系统离线单元测试")
+    print("PiMotionCam v2.8.0 音频子系统离线单元测试")
     test_parse_cards()
     test_usb_port_match()
     test_wav()

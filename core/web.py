@@ -25,7 +25,8 @@ from .i18n import resolve as resolve_language
 from .i18n import strings as i18n_strings
 from .i18n import translate as i18n_translate
 from .storage import check_target, disk_usage
-from .util import dir_size, human_size, run_command, tail_file
+from .media_stats import MediaStatsCache, list_media
+from .util import human_size, run_command, tail_file
 
 def _make_placeholder_jpeg() -> bytes:
     """相机无帧时用于占位的深灰图，保证 MJPEG 响应能立即开始。"""
@@ -45,7 +46,7 @@ def _make_placeholder_jpeg() -> bytes:
 _PLACEHOLDER_JPEG = _make_placeholder_jpeg()
 
 
-HELP_SECTIONS = [    {"title": "概览", "body": "pikrellcam-lite 是一个基于 libcamera/picamera2 的移动侦测录像服务，"
+HELP_SECTIONS = [    {"title": "概览", "body": "PiMotionCam 是一个基于 libcamera/picamera2 的移动侦测录像服务，"
                               "提供实时预览、运动检测录像、事件回看与网页调参。"},
     {"title": "运动检测", "body": "使用帧差分实现双算法并行检测：far 算法面向远处小而慢的目标，"
                                   "near 算法面向近处大目标。可在多个运动区域上分别判定，"
@@ -73,6 +74,14 @@ def create_app(service) -> Flask:
     # 浏览器还会拿旧的 app.js / style.css，界面上的新功能死活不出现。
     # 管理界面在内网、文件也不大，每次回源完全够用。
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+    media_stats = MediaStatsCache(max_age=3.0)
+    version = _version()  # Running code cannot change until the process restarts.
+
+    @app.after_request
+    def invalidate_media_stats(response):
+        if request.method in ("POST", "DELETE"):
+            media_stats.invalidate()
+        return response
     # ------------------------------------------------------------------
     # 多语言
     # ------------------------------------------------------------------
@@ -102,6 +111,8 @@ def create_app(service) -> Flask:
         path = request.path
         if path in ("/api/auth/login", "/api/auth", "/login"):
             return None
+        if request.endpoint == "static":
+            return None  # Login CSS/JS must be available before authentication.
         if request.path.startswith("/api/"):
             return jsonify({"ok": False,
                             "error": i18n_translate("需要登录", current_lang()),
@@ -201,9 +212,12 @@ def create_app(service) -> Flask:
     def api_state():
         st = service.state.snapshot()
         cfg = service.config.snapshot()
-        videos = service.config.media_sub("videos")
+        # Runtime flags start empty after a restart; the saved setting is the
+        # authority for whether the recorder accepts frames.
+        st["record_paused"] = bool(cfg["record"].get("paused", False))
         media_dir = service.config.media_dir()
-        used_bytes = dir_size(media_dir)
+        inventory = media_stats.snapshot(media_dir)
+        used_bytes = inventory["disk_bytes"]
         # 目标文件系统的真实剩余空间——每次请求都现算，
         # 不依赖后台那次 3 秒复查，避免界面显示过期的数字。
         try:
@@ -211,8 +225,8 @@ def create_app(service) -> Flask:
         except Exception:
             total_bytes, free_bytes = 0, 0
         st["media"] = {
-            "videos": len(list(videos.glob("*.mp4"))) if videos.exists() else 0,
-            "stills": len(list(service.config.media_sub("stills").glob("*.jpg"))),
+            "videos": inventory["videos"],
+            "stills": inventory["stills"],
             "disk_bytes": used_bytes,
             "disk_used": human_size(used_bytes),
             "max_disk_gb": cfg["record"]["max_disk_gb"],
@@ -226,7 +240,7 @@ def create_app(service) -> Flask:
             "dir": str(media_dir),
         }
         st["presets"] = sorted((cfg.get("presets") or {}).keys())
-        st["version"] = _version()
+        st["version"] = version
         st["auth_required"] = bool(cfg["web"].get("password_hash"))
         st["camera"] = service.camera.camera_info
         st["release"] = _release_info()
@@ -656,23 +670,17 @@ def create_app(service) -> Flask:
     @app.route("/api/videos")
     def api_videos():
         folder = service.config.media_sub("videos")
-        items = []
-        if folder.exists():
-            for f in sorted(folder.glob("*.mp4"), key=lambda p: -p.stat().st_mtime):
-                st = f.stat()
-                items.append({"name": f.name, "size": st.st_size,
-                              "size_h": human_size(st.st_size), "mtime": st.st_mtime})
+        items = list_media(folder, ".mp4")
+        for item in items:
+            item["size_h"] = human_size(item["size"])
         return jsonify(items)
 
     @app.route("/api/stills")
     def api_stills():
         folder = service.config.media_sub("stills")
-        items = []
-        if folder.exists():
-            for f in sorted(folder.glob("*.jpg"), key=lambda p: -p.stat().st_mtime):
-                st = f.stat()
-                items.append({"name": f.name, "size": st.st_size,
-                              "size_h": human_size(st.st_size), "mtime": st.st_mtime})
+        items = list_media(folder, ".jpg")
+        for item in items:
+            item["size_h"] = human_size(item["size"])
         return jsonify(items)
 
     @app.route("/api/purge", methods=["POST"])

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 编译 pikrellcam-lite 原生加速内核（core/_libpkc.so）
+# 编译 PiMotionCam 原生加速内核（core/_libpkc.so）
 #
 # 编译失败不影响服务运行 —— core/native.py 会自动回落到纯 Python + numpy 实现。
 #
@@ -49,7 +49,7 @@ esac
 PKC_VERSION="$(grep -oE '__version__\s*=\s*"[^"]+"' "$HERE/core/__init__.py" 2>/dev/null \
   | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
 [ -n "$PKC_VERSION" ] || PKC_VERSION="unknown"
-CFLAGS+=("-DPKC_VERSION_STR=\"pikrellcam-lite native ${PKC_VERSION}\"")
+CFLAGS+=("-DPKC_VERSION_STR=\"PiMotionCam native ${PKC_VERSION}\"")
 
 echo "==> 编译 $(basename "$SRC")"
 if [ "$FORCE" = "1" ]; then

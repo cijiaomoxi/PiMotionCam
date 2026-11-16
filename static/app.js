@@ -1,4 +1,4 @@
-/* pikrellcam-lite 仪表盘前端
+/* PiMotionCam 仪表盘前端
    纯原生实现，无任何外部依赖；所有接口均走 API 基址（默认同源）。
    API 基址可用 window.PKC_API_BASE 覆盖，便于脱离真实后端做联调。 */
 'use strict';
@@ -12,7 +12,8 @@ const $ = (id) => document.getElementById(id);
 
 function setText(id, text) {
   const el = $(id);
-  if (el) el.textContent = (text === null || text === undefined || text === '') ? '–' : text;
+  const value = (text === null || text === undefined || text === '') ? '–' : String(text);
+  if (el && el.textContent !== value) el.textContent = value;
 }
 
 function esc(s) {
@@ -119,7 +120,18 @@ async function api(path, opts) {
   return data;
 }
 
-const GET = (p) => api(p);
+const pendingGET = new Map();
+function GET(p) {
+  if (pendingGET.has(p)) return pendingGET.get(p);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  const result = api(p, { signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+    pendingGET.delete(p);
+  });
+  pendingGET.set(p, result);
+  return result;
+}
 const POST = (p, body) => api(p, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -194,7 +206,7 @@ function renderState(s) {
       total: media.disk_total_human || '-'
     }));
   setText('m-preset', s.preset || t('state.notSelected'));
-  setText('ver', s.version || '–');
+  setText('ver', (s.release && s.release.version) || s.version || '–');
 
   // 循环录像状态跟着 /api/state 一起刷新（每秒一次）
   if (s.loop) {
@@ -212,7 +224,7 @@ function renderState(s) {
   setText('osd-events', s.events_total || 0);
   setText('osd-disk', freeHuman);
   setText('osd-algo', det.algorithm || '–');
-  setText('osd-region', det.region || '–');
+  setText('osd-region', regionDisplayName(det.region || '–'));
   setText('osd-ratio', ((det.ratio || 0) * 100).toFixed(3) + '%');
   setText('osd-preset', s.preset || t('state.notSelected'));
   const bb = det.bbox;
@@ -303,7 +315,7 @@ function renderRegions() {
     if (i === SEL_REGION) cls.push('sel');
     return '<div class="' + cls.join(' ') + '" data-idx="' + i + '" style="left:' + (r.x * 100) +
       '%;top:' + (r.y * 100) + '%;width:' + (r.w * 100) + '%;height:' + (r.h * 100) + '%">' +
-      '<span>' + esc(r.name) + '</span>' +
+      '<span>' + esc(regionDisplayName(r.name)) + '</span>' +
       '<i class="region-handle" data-idx="' + i + '"></i></div>';
   }).join('');
   renderRegionList();
@@ -319,7 +331,7 @@ function renderRegionList() {
   box.innerHTML = REGIONS.map((r, i) =>
     '<div class="rrow' + (i === SEL_REGION ? ' sel' : '') + '" data-idx="' + i + '">' +
     '<input type="checkbox" data-act="toggle" data-idx="' + i + '"' + (r.enabled ? ' checked' : '') + '>' +
-    '<span class="nm" title="' + esc(r.name) + '">' + esc(r.name) + '</span>' +
+    '<span class="nm" title="' + esc(regionDisplayName(r.name)) + '">' + esc(regionDisplayName(r.name)) + '</span>' +
     '<span class="pc">' + Math.round(r.x * 100) + ',' + Math.round(r.y * 100) + ' ' +
     Math.round(r.w * 100) + '×' + Math.round(r.h * 100) + '%</span>' +
     '<button class="sm" data-act="rename" data-idx="' + i + '">' + t('btn.rename') + '</button>' +
@@ -329,9 +341,9 @@ function renderRegionList() {
 
 function nextRegionName() {
   let n = REGIONS.length + 1;
-  const used = new Set(REGIONS.map((r) => r.name));
-  while (used.has(t('region.defaultName') + n)) n++;
-  return t('region.defaultName') + n;
+  const used = new Set(REGIONS.map((r) => regionDisplayName(r.name)));
+  while (used.has(t('region.numberedName', { n }))) n++;
+  return t('region.numberedName', { n });
 }
 
 async function saveRegions() {
@@ -348,7 +360,7 @@ async function saveRegions() {
 async function renameRegion(i) {
   const v = await modal({
     title: t('region.renameTitle'), text: t('region.renameText'),
-    withInput: true, value: REGIONS[i].name, okText: t('btn.save')
+    withInput: true, value: regionDisplayName(REGIONS[i].name), okText: t('btn.save')
   });
   if (v === null) return;
   REGIONS[i].name = v || nextRegionName();
@@ -1138,7 +1150,7 @@ async function loadEvents() {
         '<div class="t">' + esc(e.id) + '</div>' +
         '<div class="s">' + t('btn.start') + ' ' + stamp(e.start) + ' ' + t('event.duration') + ' ' + (e.duration || 0) + 's · ' +
         bytes(e.size) + ' ' + t('event.frames') + ' ' + (e.frames || 0) + '</div>' +
-        '<div class="s">' + t('event.algorithm') + ' ' + esc(e.algorithm || '–') + ' ' + t('event.region') + ' ' + esc(e.region || '–') +
+        '<div class="s">' + t('event.algorithm') + ' ' + esc(e.algorithm || '–') + ' ' + t('event.region') + ' ' + esc(regionDisplayName(e.region || '–')) +
         ' ' + t('event.codec') + ' ' + esc(e.encoder || '–') + '</div>' +
         '<div class="acts">' +
         '<a class="btn sm" style="padding:3px 9px;border:1px solid var(--line-2);border-radius:6px" href="' + esc(vid) +
@@ -1843,6 +1855,7 @@ async function loadLog() {
   try {
     const r = await GET('/api/log');
     const lines = r.lines || [];
+    if (lines.length === LOG_LINES.length && lines.every((line, i) => line === LOG_LINES[i])) return;
     LOG_LINES = lines;
     const box = $('logbox');
     box.innerHTML = lines.map((l) => {
@@ -2057,13 +2070,17 @@ async function init() {
   $('btn-loop-purge').addEventListener('click', purgeLoop);
   $('btn-audio-save').addEventListener('click', saveAudio);
 
-  setInterval(pollState, 1000);
-  setInterval(loadLog, 1000);
-  setInterval(loadTimelapse, 3000);
-  setInterval(() => {
-    const p = document.getElementById('page-media');
-    if (p && p.classList.contains('active')) loadAudio(true);
-  }, 400);
+  const visible = () => !document.hidden;
+  const onTab = (name) => visible() && $('page-' + name).classList.contains('active');
+  [
+    PKCPolling.createPoller(pollState, 1000, visible),
+    PKCPolling.createPoller(loadLog, 1000, () => onTab('system')),
+    PKCPolling.createPoller(loadTimelapse, 3000, () => onTab('media')),
+    PKCPolling.createPoller(() => loadAudio(true), 400, () => onTab('media'))
+  ].forEach((poller) => poller.start());
+  document.addEventListener('visibilitychange', () => {
+    if (visible()) pollState();
+  });
   setTimeout(loadServo, 500);
 }
 

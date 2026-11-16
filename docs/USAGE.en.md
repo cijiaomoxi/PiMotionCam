@@ -1,10 +1,10 @@
-# pikrellcam-lite User Guide
+# PiMotionCam User Guide
 
 Written for users who already have a Raspberry Pi and want to install and run a motion-detection recording service on it.
 
-- Applies to: **v2.6.0** (current development version is v2.6.0; this release is v2.6.0)
+- Applies to: **v2.8.1** · [中文](使用文档.md) · [Bilingual project home](../README.md)
 - Web interface: **http://pi.local:8080/**
-- Companion document: technical internals and design rationale live in `README.md` at the repository root. This guide covers "how do I install it and use it".
+- Companion document: technical internals and design rationale live in [README.en.md](../README.en.md). This guide covers "how do I install it and use it".
 - Acknowledgements and reference: <https://github.com/billw2/pikrellcam> — this is an independent, unofficial implementation; see "Acknowledgements and References" in the repository root `README.md`.
 
 ---
@@ -33,15 +33,15 @@ Written for users who already have a Raspberry Pi and want to install and run a 
 
 ## 1. Introduction and Features
 
-pikrellcam-lite is a **motion-detection recording service** that runs on a Raspberry Pi. The camera streams continuously; when motion appears in the frame it triggers a recording automatically, and once the recording finishes it produces a full-frame thumbnail plus a cropped image of the moving object. You tune parameters, review recordings, and do maintenance from a browser-based management console.
+PiMotionCam is a **motion-detection recording service** that runs on a Raspberry Pi. The camera streams continuously; when motion appears in the frame it triggers a recording automatically, and once the recording finishes it produces a full-frame thumbnail plus a cropped image of the moving object. You tune parameters, review recordings, and do maintenance from a browser-based management console.
 
 It reproduces the web features of the official [PiKrellCam](https://github.com/billw2/pikrellcam) and adds a number of enhancements on top.
 
 ### How It Differs from Official PiKrellCam
 
-The official PiKrellCam's last commit dates to 2020. It was built on the legacy MMAL camera stack that Debian 13 has removed, so it no longer compiles or runs on current systems. pikrellcam-lite keeps the official user experience but replaces the foundation:
+The official PiKrellCam's last commit dates to 2020. It was built on the legacy MMAL camera stack that Debian 13 has removed, so it no longer compiles or runs on current systems. PiMotionCam keeps the official user experience but replaces the foundation:
 
-| Area | Official PiKrellCam | pikrellcam-lite |
+| Area | Official PiKrellCam | PiMotionCam |
 | --- | --- | --- |
 | Camera stack | MMAL (`/opt/vc`, delisted from the repos) | libcamera / picamera2 |
 | Motion detection | BCM2835 hardware motion vectors | Frame differencing with neighborhood density denoising |
@@ -101,7 +101,7 @@ The official PiKrellCam's last commit dates to 2020. It was built on the legacy 
 
 Simply plug it into a USB port on the Pi. No extra configuration is needed; the system exposes it as `/dev/videoN`.
 
-> Tip: the libcamera stack in Debian 13 ships only Raspberry Pi's own processors and **cannot enumerate USB cameras**. pikrellcam-lite implements an ffmpeg + V4L2 backend for this, so USB cameras must be picked manually under "System → Camera" in the web interface.
+> Tip: the libcamera stack in Debian 13 ships only Raspberry Pi's own processors and **cannot enumerate USB cameras**. PiMotionCam implements an ffmpeg + V4L2 backend for this, so USB cameras must be picked manually under "System → Camera" in the web interface.
 
 ### Confirm the Camera Is Detected
 
@@ -125,7 +125,7 @@ v4l2-ctl -d /dev/video0 --list-formats-ext
 Run this on your **development machine** (replace `PKC_KEY` with your SSH private key path):
 
 ```bash
-scp -r -i ~/.ssh/id_ed25519_pi_mcode pikrellcam-lite pi@pi.local:~/
+scp -r -i ~/.ssh/id_ed25519_pi_mcode PiMotionCam pi@pi.local:~/
 ```
 
 ### 3.2 Run the Install Script
@@ -134,7 +134,7 @@ Log in to the Raspberry Pi and run:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_pi_mcode pi@pi.local
-bash ~/pikrellcam-lite/install.sh
+bash ~/PiMotionCam/install.sh
 ```
 
 The install script performs these steps in order:
@@ -501,7 +501,7 @@ directory now). If the program only asks "does this path exist?", it concludes t
 writing the recordings into the SD card. Over time that fills up the system partition and **bricks the Raspberry
 Pi — it will no longer boot**.
 
-pikrellcam-lite therefore does the following:
+PiMotionCam therefore does the following:
 
 | Check | What it does |
 | --- | --- |
@@ -1477,7 +1477,7 @@ The structure looks like this:
 
 ```json
 {
-  "app.title": "pikrellcam-lite",
+  "app.title": "PiMotionCam",
   "tab.preview": "实时预览"
 }
 ```
@@ -1577,7 +1577,7 @@ systemctl --user restart pikrellcam-lite.service
 
 ### 13.5 First-Time Install versus Versioned Publishing
 
-- **First-time install**: copy the source to the Raspberry Pi and run `bash ~/pikrellcam-lite/install.sh`. The script performs the installation and publishes the first version at the same time.
+- **First-time install**: copy the source to the Raspberry Pi and run `bash ~/PiMotionCam/install.sh`. The script performs the installation and publishes the first version at the same time.
 - **Later upgrades**: always publish with `deploy.sh`. Editing code directly on the Raspberry Pi means the next publish will overwrite it.
 
 ---
@@ -1598,7 +1598,7 @@ The generated archive contains:
 
 | Content | Description |
 | --- | --- |
-| All source code | `core/`, `templates/`, `static/`, `krellcam.py` |
+| All source code | `core/`, `templates/`, `static/`, `pimotioncam.py` |
 | The C kernel source | `core/_pkc_native.c` (without the compiled `.so`, which each target machine builds for itself) |
 | Front-end assets | `static/app.js`, `static/style.css`, `templates/index.html`, `templates/login.html` |
 | Bilingual documentation | `docs/使用文档.md`, `docs/USAGE.en.md`, `README.md` |
@@ -1609,16 +1609,16 @@ The generated archive contains:
 
 ```bash
 # 1. Tag and push
-git tag -a v2.5.0 -m "pikrellcam-lite v2.5.0"
+git tag -a v2.5.0 -m "PiMotionCam v2.5.0"
 git push origin v2.5.0
 
 # 2. Build the release archive
 bash package.sh
 
 # 3. Upload (replace the file names with the ones the script actually produced)
-gh release create v2.5.0 ./dist/pikrellcam-lite-v2.5.0.tar.gz \
-  ./dist/pikrellcam-lite-v2.5.0.tar.gz.sha256 \
-  --title "pikrellcam-lite v2.5.0" \
+gh release create v2.5.0 ./dist/pimotioncam-v2.5.0.tar.gz \
+  ./dist/pimotioncam-v2.5.0.tar.gz.sha256 \
+  --title "PiMotionCam v2.5.0" \
   --notes "Bilingual interface (Chinese/English), packaging script, detection and recording stability improvements"
 ```
 
@@ -1628,8 +1628,8 @@ After publishing to GitHub, users download the archive, extract it, and follow [
 
 ```bash
 # On the Raspberry Pi
-tar xzf pikrellcam-lite-v2.5.0.tar.gz
-cd pikrellcam-lite
+tar xzf pimotioncam-v2.8.1-YYYYMMDD.tar.gz
+cd pimotioncam
 bash install.sh
 ```
 
@@ -1639,7 +1639,7 @@ bash install.sh
 
 ### 15.1 What It Is
 
-pikrellcam-lite moves the three most expensive stages of the frame-processing chain out of Python/numpy and into C:
+PiMotionCam moves the three most expensive stages of the frame-processing chain out of Python/numpy and into C:
 
 | Kernel function | Purpose |
 | --- | --- |
@@ -1684,7 +1684,7 @@ To disable acceleration temporarily for comparison or troubleshooting, set the `
 
 ```bash
 # Affects this run only
-PKC_NO_NATIVE=1 ~/pikrellcam-lite/venv/bin/python ~/pikrellcam-lite/current/krellcam.py
+PKC_NO_NATIVE=1 ~/pikrellcam-lite/venv/bin/python ~/pikrellcam-lite/current/pimotioncam.py
 
 # Or write it into the systemd service
 systemctl --user edit pikrellcam-lite.service
@@ -1788,7 +1788,7 @@ ps aux | grep -E 'rpicam-vid|libcamera|camera-app' | grep -v grep
 pkill -f rpicam-vid
 ```
 
-Common culprits: the official camera application, a manual `rpicam-vid` test, or a second pikrellcam-lite instance.
+Common culprits: the official camera application, a manual `rpicam-vid` test, or a second PiMotionCam instance.
 
 ### 16.7 Permission Problems
 

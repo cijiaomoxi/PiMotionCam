@@ -1,4 +1,4 @@
-/* pikrellcam-lite 多语言运行时
+/* PiMotionCam 多语言运行时
    ------------------------------------------------------------------
    与后端共用 `core/locales/*.json` 同一份文案：
      * 后端在渲染模板时把整包注入 `window.PKC_I18N`；
@@ -27,6 +27,15 @@
       });
     }
     return s;
+  }
+
+  // Saved names identify detection regions. Localize built-in labels only;
+  // never rewrite configuration, preset names or user-provided descriptions.
+  function regionDisplayName(name) {
+    var value = (name === null || name === undefined) ? '' : String(name);
+    if (/^(?:全画面|Full frame|Full screen)$/i.test(value)) return t('region.fullFrame');
+    var numbered = /^(?:区域\s*|Region\s*)([0-9]+)$/i.exec(value);
+    return numbered ? t('region.numberedName', { n: numbered[1] }) : value;
   }
 
   /* 把静态标记的文案替换掉。
@@ -99,6 +108,7 @@
 
   global.PKC_I18N = P;
   global.t = t;
+  global.regionDisplayName = regionDisplayName;
   global.applyI18n = applyI18n;
   global.setLanguage = setLanguage;
   global.mountLangSwitch = mountLangSwitch;

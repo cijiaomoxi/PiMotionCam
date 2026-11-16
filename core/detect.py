@@ -143,6 +143,16 @@ class Detector:
     def process(self, gray: np.ndarray) -> Detection:
         """喂入一帧灰度图，返回检测结果。"""
         with self._lock:
+            if not self._cfg.get("motion", "enabled", default=True):
+                # Keep the baseline current while disabled, and discard old
+                # consecutive hits so re-enabling starts a fresh sequence.
+                self._prev = gray.copy()
+                self._hits.clear()
+                self.last = Detection()
+                self.frame_count += 1
+                self._fps_count += 1
+                self._maybe_update_fps()
+                return self.last
             prev = self._prev
             if prev is None or prev.shape != gray.shape:
                 self._prev = gray.copy()

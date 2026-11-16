@@ -1,0 +1,27 @@
+{
+  "version": "2.8.1",
+  "service_active": "active",
+  "release": "releases/20261115-1200-v2.8.1",
+  "camera_ready": true,
+  "camera_backend": "v4l2",
+  "audio_running": true,
+  "loop_enabled": true,
+  "config_matches_pre_upgrade": true,
+  "live_regression": {
+    "PASS": 64,
+    "SKIP": 1
+  },
+  "source_sha256": {
+    "core/__init__.py": "b87c02b5482575c5c5a1c5377a2c31073a47d91546edf33e70b66cc49e017c71",
+    "core/_pkc_native.c": "7419c3677139ec6f16870c0ff326f92608b7b01325b5cccbbe046add29afeee9",
+    "core/native.py": "bc366c038b077ccd38ec3671ff007666d08c8db3e83acd97442665396a4a5783",
+    "core/audio.py": "c4b260627eb754135c96e90ca8b743170fb4227d03f625b8a13b14fbdd6e8e78",
+    "core/camera.py": "3f15536fc639263f9cde9143fec34b34f81cf56700978a9da8f85f706275a6b7",
+    "core/recorder.py": "12e8bc98006a85893ad3464198739acc2cfdd81b1e0fbd1ecc49ea422fcc8755",
+    "core/web.py": "f2e4974ecf73ae1902efb653456e83b10ba4a7dce0e55c739e7544dbec8ce298",
+    "core/media_stats.py": "e9779f9a8350d858613abd6c9182e2dbe4f9f15846d580815b36f426f9e94106",
+    "static/app.js": "db378ff03f5c1bdc4c4e852ba0df225fb0656d5db25cc352dc0458f7f28b1e75",
+    "static/polling.js": "de426780a757ba5d743cb77d4351c63ea0b370bc85c2097509099f868c72cbc4",
+    "templates/index.html": "be80e17710e6cfa72d02d92f7352c9d40e13a9d0137989848ab438b3bdae2e1a"
+  }
+}
