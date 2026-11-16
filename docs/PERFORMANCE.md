@@ -1,6 +1,6 @@
 # 性能与兼容性验证 / Performance and compatibility
 
-v2.8.1 · 2026-11-15
+v2.8.1 · 2026-11-15 · 2026-11-16 补充控制开关验证 / control-switch follow-up
 
 ## 设计 / Design
 
@@ -47,7 +47,7 @@ Small-region and single-region detection did not speed up; array validation and 
 | 验证 / Check | 结果 / Result |
 | --- | --- |
 | 原有音频、核心与 Web 检查 / Existing audio, core and Web checks | 57 + 136 + 70 = 263 项通过 / 263 passed |
-| 新增检查 / New checks | 15 项通过；关闭 C 后 9 项通过、6 项按设计跳过 / 15 passed; with C disabled, 9 passed and 6 intentionally skipped |
+| 新增检查 / New checks | 17 项通过；关闭 C 后 11 项通过、6 项按设计跳过 / 17 passed; with C disabled, 11 passed and 6 intentionally skipped |
 | 在线 API 回归 / Live API regression | 64 项通过，0 失败，1 类破坏性操作跳过 / 64 passed, 0 failed; one destructive-operation category skipped |
 | 网页轮询 / Browser polling | Node.js 4 项通过；实际网页中英文、预览、媒体、系统和帮助已查看 / 4 Node.js checks passed; Chinese/English, preview, media, system and help inspected in a real browser |
 | USB + CSI 摄像头 / USB + CSI capture | USB V4L2、CSI OV5647 的 rpicam MJPEG 与 libcamera RGB888 均有 1280×720 有效 JPEG / Valid 1280×720 JPEG on USB V4L2 and CSI OV5647 via rpicam MJPEG and libcamera RGB888 |
@@ -57,6 +57,10 @@ Small-region and single-region detection did not speed up; array validation and 
 硬件结果：[摄像头](benchmarks/pi4-cameras.json)、[最终录像](benchmarks/pi4-recording.json)、[配置一致性与代码哈希](benchmarks/pi4-final-health.json)。这些文件只含验证元数据，不包含配置、密码或相机影像。原有媒体目录和历史发布目录保留。
 
 Hardware results: [cameras](benchmarks/pi4-cameras.json), [final recordings](benchmarks/pi4-recording.json), and [settings parity and source hashes](benchmarks/pi4-final-health.json). These contain validation metadata, not configuration, passwords or camera images. Existing media and release directories were retained.
+
+原始性能与硬件数据对应 2026-11-15 的构建。2026-11-16 在第二台 4B 升级时补充修复并检查了两项控制行为：重启后按持久化配置显示暂停录像；关闭侦测后清空连续命中并更新背景帧，重新启用时从新帧开始计数。检查总数由 15 项增至 17 项。
+
+Raw performance and hardware data correspond to the 2026-11-15 build. A second Pi 4B upgrade on 2026-11-16 exposed two control issues, now fixed and checked: display recording pause from persisted configuration after restart, and clear consecutive hits while refreshing the baseline when motion detection is disabled so re-enabling counts fresh frames. The check count increased from 15 to 17.
 
 Mac 上的 C 独立检查通过 AddressSanitizer + UndefinedBehaviorSanitizer；4B 上通过 UBSan。该 Pi 的 ASan 在进入测试前初始化分配器失败，因此未声称其通过。Linux CI 模板已配置相同的 ASan + UBSan 检查，但云端尚未运行。
 

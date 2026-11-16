@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修正实测帧率把 N 个时间戳当成 N 段间隔的问题，避免配置 10 fps 被误估为 11 fps、缩短视频时间轴。
 - 登录前允许加载静态资源；回归工具恢复原有侦测、暂停与语言设置。
 - 2026-11-16 补充修复：暂停状态从已保存配置读取，避免重启后界面错误显示为可录制。
+- 2026-11-16 补充修复：侦测总开关实际停止事件触发；暂停时更新背景帧并清空连续命中，恢复时重新计数。
 - README 首页改为中英双语，保留完整的中文与英文技术说明和使用文档，扩充双语网页帮助。
 - 部署包排除虚拟环境、媒体和本机二进制；Git 检出保留元数据以支持网页升级；切换前编译，服务只重启一次。
 - 新增真实数组、并发、缓冲容量、缓存与轮询检查，以及 Python 3.11 / 3.13 CI 模板（尚未启用）。
@@ -56,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Estimate frame rate from N−1 intervals for N timestamps, avoiding a 10 fps stream being measured as 11 fps and shortening the video timeline.
 - Serve login static assets before authentication; restore the original motion, pause and language settings after regression tests.
 - Follow-up on 2026-11-16: read the paused state from saved configuration so a restart cannot incorrectly display recording as enabled.
+- Follow-up on 2026-11-16: honor the motion master switch, refresh the baseline and clear consecutive hits while disabled, then count fresh hits when re-enabled.
 - Introduce a bilingual README landing page, preserve full Chinese/English technical and user guides, and expand bilingual in-app help.
 - Exclude virtual environments, media and local binaries from deployment; retain checkout metadata for web upgrades, compile before switching and restart once.
 - Add real-array, concurrency, capacity, caching and polling checks, with a Python 3.11 / 3.13 CI template (not yet enabled).

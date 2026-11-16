@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import copy
 import io
 import math
@@ -154,6 +155,32 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(got, want)
         fast.reset()
         self.assertFalse(fast.process(base).motion)
+
+
+class DetectorControlTests(unittest.TestCase):
+    def test_motion_disable_clears_hits_and_resumes_with_fresh_frames(self):
+        for force_python in (False, True):
+            with tempfile.TemporaryDirectory() as directory:
+                config = config_mod.Config(Path(directory) / "config.json")
+                config.set({"motion": {"enabled": True, "algorithms": {
+                    "far": {"enabled": True, "count_limit": 0,
+                            "consecutive_frames": 2}, "near": {"enabled": False}}}})
+                detector = Detector(config)
+                frame = np.zeros((24, 32), dtype=np.uint8)
+                backend = (patch.object(native, "available", return_value=False)
+                           if force_python else contextlib.nullcontext())
+                with backend:
+                    self.assertFalse(detector.process(frame).motion)
+                    self.assertFalse(detector.process(frame).motion)
+                    self.assertTrue(detector.process(frame).motion)
+                    config.set({"motion": {"enabled": False}})
+                    frame[:] = 255
+                    self.assertFalse(detector.process(frame).motion)
+                    self.assertEqual(detector._hits, {})
+                    self.assertTrue(np.array_equal(detector._prev, frame))
+                    config.set({"motion": {"enabled": True}})
+                    self.assertFalse(detector.process(frame).motion)
+                    self.assertTrue(detector.process(frame).motion)
 
 
 class AudioAndQueueTests(unittest.TestCase):
