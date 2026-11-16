@@ -179,7 +179,7 @@ def main() -> int:
     app = create_app(svc)
     client = app.test_client()
 
-    print("pikrellcam-lite v2.8.0 本地接口集成测试")
+    print("PiMotionCam v2.8.0 本地接口集成测试")
 
     # ------------------------------------------------------------------
     print("\n[成像参数接口]")

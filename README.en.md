@@ -1,4 +1,6 @@
-# pikrellcam-lite v2
+# PiMotionCam v2.8.1
+
+The rename retains `~/pikrellcam-lite` and `pikrellcam-lite.service` for existing configuration, media and upgrade compatibility.
 
 [中文 / English project home](README.md) · [中文技术说明](README.zh-CN.md) · [English user guide](docs/USAGE.en.md)
 
@@ -22,11 +24,11 @@ for the changes, measurement method and compatibility checks.
 
 ---
 
-> 📋 **A feature-by-feature comparison with the upstream project** is in [`docs/上游功能对照.md`](docs/上游功能对照.md): which features are covered, which are partially covered, which are missing, and what pikrellcam-lite has that upstream does not.
+> 📋 **A feature-by-feature comparison with the upstream project** is in [`docs/上游功能对照.md`](docs/上游功能对照.md): which features are covered, which are partially covered, which are missing, and what PiMotionCam has that upstream does not.
 
 ## Acknowledgements and References
 
-**pikrellcam-lite** (GitHub repository: `pikrellcam_update`) is a multilingual re-implementation
+**PiMotionCam** (GitHub repository: `PiMotionCam`) is a multilingual re-implementation
 built on the **feature design and user experience** of
 **[PiKrellCam](https://github.com/billw2/pikrellcam)**. Our sincere thanks go to the original author
 **Bill Wilson ([@billw2](https://github.com/billw2))** and to the PiKrellCam community.
@@ -611,7 +613,7 @@ curl -s -X POST http://<pi>:8080/api/command \
 Every version is kept independently and **is never overwritten**:
 
 ```bash
-cd pikrellcam-lite
+cd PiMotionCam
 bash deploy.sh                  # publish the current working directory → releases/<timestamp>-v<version>/
 bash deploy.sh --list           # list every retained version + the running one
 bash deploy.sh --rollback v2.4.0   # roll back to a historical version
@@ -625,10 +627,10 @@ and can be rolled back at any time.
 
 ```bash
 # 1. Copy to the Raspberry Pi
-scp -r -i ~/.ssh/id_ed25519_pi_mcode pikrellcam-lite pi@pi.local:~/
+scp -r -i ~/.ssh/id_ed25519_pi_mcode PiMotionCam pi@pi.local:~/
 
 # 2. Install on the Raspberry Pi
-ssh -i ~/.ssh/id_ed25519_pi_mcode pi@pi.local 'bash ~/pikrellcam-lite/install.sh'
+ssh -i ~/.ssh/id_ed25519_pi_mcode pi@pi.local 'bash ~/PiMotionCam/install.sh'
 
 # 3. Open the browser
 open http://pi.local:8080/
@@ -819,7 +821,7 @@ echo "record off" > ~/.pikrellcam/commands.fifo
 ~/pikrellcam-lite/
 ├── current -> releases/<版本>   # symlink to the running version
 ├── releases/<版本>/             # one complete, independent directory per version, all of them kept
-│   ├── krellcam.py              # entry point
+│   ├── pimotioncam.py              # entry point
 │   ├── install.sh / deploy.sh / build_native.sh   # install, publish, native kernel build
 │   ├── core/
 │   │   ├── app.py               # service container + internal command dispatch

@@ -1,5 +1,5 @@
 /*
- * pikrellcam-lite 原生加速内核（版本号见 pkc_native_version()）
+ * PiMotionCam 原生加速内核（版本号见 pkc_native_version()）
  *
  * 三个内核，把采集帧处理链路里最耗时的三段从 Python/numpy 挪进 C：
  *
@@ -444,7 +444,7 @@ const char *pkc_native_version(void)
 #ifdef PKC_VERSION_STR
     return PKC_VERSION_STR;
 #else
-    return "pikrellcam-lite native";
+    return "PiMotionCam native";
 #endif
 }
 

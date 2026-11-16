@@ -869,7 +869,7 @@ def test_record_countdown() -> None:
 
 
 def main() -> int:
-    print("pikrellcam-lite v2.7.0 离线单元测试")
+    print("PiMotionCam v2.7.0 离线单元测试")
     test_normalize()
     test_rpicam()
     test_libcamera()

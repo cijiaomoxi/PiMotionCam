@@ -13,8 +13,8 @@
 T = {
     # ---------------- 应用 / 顶栏 ----------------
     "移动侦测录像控制台": ("app.console", "Motion Detection Recording Console"),
-    "pikrellcam-lite · 移动侦测录像": ("app.title", "pikrellcam-lite · Motion Detection Recording"),
-    "pikrellcam-lite · 登录": ("app.titleLogin", "pikrellcam-lite · Sign in"),
+    "PiMotionCam · 移动侦测录像": ("app.title", "PiMotionCam · Motion Detection Recording"),
+    "PiMotionCam · 登录": ("app.titleLogin", "PiMotionCam · Sign in"),
     "连接中…": ("status.connecting", "Connecting…"),
     "侦测 FPS": ("metric.detectFps", "Detect FPS"),
     "事件": ("metric.events", "Events"),
@@ -85,6 +85,8 @@ T = {
     "给这个检测区域起个名字。": ("region.renameText", "Give this detection region a name."),
     "保存": ("btn.save", "Save"),
     "区域": ("region.defaultName", "Region"),
+    "全画面": ("region.fullFrame", "Full frame"),
+    "区域{n}": ("region.numberedName", "Region {n}"),
     "区域已保存（": ("toast.regionSavedPrefix", "Regions saved ("),
     "个）": ("toast.regionSavedSuffix", ")"),
     "保存区域失败：": ("err.saveRegions", "Failed to save regions: "),
@@ -674,7 +676,7 @@ EXTRA = {
 # ----------------------------------------------------------------------
 HELP = {
     "help.1.title": ('概览', 'Overview'),
-    "help.1.body": ('pikrellcam-lite 是一个基于 libcamera/picamera2 的移动侦测录像服务，提供实时预览、运动检测录像、事件回看与网页调参。', 'pikrellcam-lite is a motion-detection recording service built on libcamera/picamera2. It provides live preview, motion-triggered recording, event playback and on-page tuning.'),
+    "help.1.body": ('PiMotionCam 是一个基于 libcamera/picamera2 的移动侦测录像服务，提供实时预览、运动检测录像、事件回看与网页调参。', 'PiMotionCam is a motion-detection recording service built on libcamera/picamera2. It provides live preview, motion-triggered recording, event playback and on-page tuning.'),
     "help.2.title": ('运动检测', 'Motion detection'),
     "help.2.body": ('使用帧差分实现双算法并行检测：far 算法面向远处小而慢的目标，near 算法面向近处大目标。可在多个运动区域上分别判定，区域可在网页预览图上拖拽绘制并命名保存。', 'Motion is detected with frame differencing running two algorithms in parallel: the far algorithm targets small, slow objects in the distance, the near algorithm targets large objects up close. Every motion region is judged independently, and regions can be drawn on the preview image and named for reuse.'),
     "help.3.title": ('录像', 'Recording'),

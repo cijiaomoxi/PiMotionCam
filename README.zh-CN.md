@@ -1,4 +1,6 @@
-# pikrellcam-lite v2
+# PiMotionCam v2.8.1
+
+更名后继续沿用 `~/pikrellcam-lite` 和 `pikrellcam-lite.service`，现有配置、媒体与升级入口保持兼容。
 
 [中文 / English 项目首页](README.md) · [English technical guide](README.en.md) · [中文使用文档](docs/使用文档.md)
 
@@ -24,7 +26,7 @@ v2.8.1 保留 v2.8.0 的功能、配置与 API，优化多区域检测、音频�
 
 ## 致谢与参考
 
-本项目 **pikrellcam-lite**（GitHub 仓库：`pikrellcam_update`）
+本项目 **PiMotionCam**（GitHub 仓库：`PiMotionCam`）
 是在 **[PiKrellCam](https://github.com/billw2/pikrellcam)** 的功能设计与使用体验之上重新实现的多语言版本。
 在此向原作者 **Bill Wilson（[@billw2](https://github.com/billw2)）** 及 PiKrellCam 社区致以诚挚的谢意。
 
@@ -572,7 +574,7 @@ curl -s -X POST http://<pi>:8080/api/command \
 每个版本都独立保留，**永不覆盖**：
 
 ```bash
-cd pikrellcam-lite
+cd PiMotionCam
 bash deploy.sh            # 发布当前工作目录 → releases/<时间戳>-v<版本>/
 bash deploy.sh --list     # 列出全部已保留版本 + 当前运行版本
 bash deploy.sh --rollback v2.0.0   # 回滚到指定历史版本
@@ -585,10 +587,10 @@ bash deploy.sh --rollback v2.0.0   # 回滚到指定历史版本
 
 ```bash
 # 1. 拷贝到树莓派
-scp -r -i ~/.ssh/id_ed25519_pi_mcode pikrellcam-lite pi@pi.local:~/
+scp -r -i ~/.ssh/id_ed25519_pi_mcode PiMotionCam pi@pi.local:~/
 
 # 2. 在树莓派上安装
-ssh -i ~/.ssh/id_ed25519_pi_mcode pi@pi.local 'bash ~/pikrellcam-lite/install.sh'
+ssh -i ~/.ssh/id_ed25519_pi_mcode pi@pi.local 'bash ~/PiMotionCam/install.sh'
 
 # 3. 打开浏览器
 open http://pi.local:8080/
@@ -776,7 +778,7 @@ echo "record off" > ~/.pikrellcam/commands.fifo
 ~/pikrellcam-lite/
 ├── current -> releases/<版本>   # 当前运行版本软链
 ├── releases/<版本>/             # 每个版本一个独立完整目录，全部保留
-│   ├── krellcam.py              # 入口
+│   ├── pimotioncam.py              # 入口
 │   ├── install.sh               # 安装脚本
 │   ├── core/
 │   │   ├── app.py               # 服务容器 + 内部命令调度

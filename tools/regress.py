@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pikrellcam-lite 全量 API 回归测试。
+"""PiMotionCam 全量 API 回归测试。
 
 对运行中的服务逐个接口做冒烟测试，验证「发布前不该坏的东西都没坏」。
 只做**可逆**的操作：所有会改状态的动作都改完立刻改回去；
@@ -354,7 +354,7 @@ def main() -> int:
     BASE = "http://%s:%s" % (args.host, args.port)
 
     print("=" * 66)
-    print("pikrellcam-lite 回归测试  →  %s" % BASE)
+    print("PiMotionCam 回归测试  →  %s" % BASE)
     print("=" * 66)
 
     st, _ = req("GET", "/api/state")

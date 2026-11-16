@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 打包 pikrellcam-lite，产出可用于 GitHub Release 的发布包。
+# 打包 PiMotionCam，产出可用于 GitHub Release 的发布包。
 #
 # 产出物（默认落在 dist/）：
-#   pikrellcam-lite-v<版本>-<日期>.tar.gz   完整源码包
-#   pikrellcam-lite-v<版本>-<日期>.tar.gz.sha256   校验和
-#   pikrellcam-lite-v<版本>-<日期>.zip             同内容（给 Windows 用户）
+#   pimotioncam-v<版本>-<日期>.tar.gz   完整源码包
+#   pimotioncam-v<版本>-<日期>.tar.gz.sha256   校验和
+#   pimotioncam-v<版本>-<日期>.zip             同内容（给 Windows 用户）
 #
 # 设计原则：
 #   * 打包内容 = 干净仓库（不含本地版本快照、缓存、录像、日志、虚拟环境）；
@@ -44,16 +44,16 @@ read_version() {
 VERSION="$(read_version)"
 [ "$VERSION" != "0.0.0" ] || die "读不到版本号，检查 core/__init__.py"
 DATE="$(date +%Y%m%d)"
-BASE="pikrellcam-lite-v${VERSION}-${DATE}"
+BASE="pimotioncam-v${VERSION}-${DATE}"
 
-echo "==> 打包 pikrellcam-lite v${VERSION}"
+echo "==> 打包 PiMotionCam v${VERSION}"
 
 # ----------------------------------------------------------------------
 # 1. 收集文件
 # ----------------------------------------------------------------------
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-PKGDIR="$STAGE/pikrellcam-lite"
+PKGDIR="$STAGE/pimotioncam"
 mkdir -p "$PKGDIR"
 
 copy() {   # copy <相对路径>
@@ -74,6 +74,7 @@ copy deploy.sh
 copy package.sh
 copy build_native.sh
 copy krellcam.py
+copy pimotioncam.py
 copy config.json
 copy README.md
 copy README.zh-CN.md
@@ -109,7 +110,7 @@ find "$PKGDIR" -type f \( -name '*.so' -o -name '*.o' \) -delete
 find "$PKGDIR" -name '.DS_Store' -type f -delete 2>/dev/null || true
 rm -rf "$PKGDIR/versions" "$PKGDIR/media" "$PKGDIR/logs" "$PKGDIR/venv" 2>/dev/null || true
 chmod +x "$PKGDIR/install.sh" "$PKGDIR/build_native.sh" "$PKGDIR/krellcam.py" \
-       "$PKGDIR/deploy.sh" 2>/dev/null || true
+       "$PKGDIR/pimotioncam.py" "$PKGDIR/deploy.sh" 2>/dev/null || true
 
 # ----------------------------------------------------------------------
 # 3. 校验
@@ -127,10 +128,10 @@ REQUIRED=(
   "static/app.js" "static/i18n.js" "static/polling.js" "static/style.css"
   "docs/使用文档.md" "docs/USAGE.en.md" "docs/上游功能对照.md" "docs/PERFORMANCE.md"
   "README.md" "README.zh-CN.md" "README.en.md" "CHANGELOG.md" "LICENSE" "requirements-test.txt"
-  "install.sh" "build_native.sh" "krellcam.py" "deploy.sh" "package.sh"
+  "install.sh" "build_native.sh" "krellcam.py" "pimotioncam.py" "deploy.sh" "package.sh"
   "tools/test_v270.py" "tools/test_web_v270.py" "tools/test_audio.py"
   "tools/test_optimizations.py" "tools/test_polling.cjs" "tools/benchmark.py"
-  "tools/test_native_sanitizer.c"
+  "tools/test_native_sanitizer.c" "tools/test_i18n.cjs"
 )
 MISSING=0
 for rel in "${REQUIRED[@]}"; do
@@ -196,11 +197,11 @@ TARBALL="$OUT_DIR/$BASE.tar.gz"
 ZIP="$OUT_DIR/$BASE.zip"
 
 echo "==> 生成 tar.gz"
-tar czf "$TARBALL" -C "$STAGE" pikrellcam-lite
+tar czf "$TARBALL" -C "$STAGE" pimotioncam
 
 if [ "$DO_ZIP" = "1" ] && command -v zip >/dev/null 2>&1; then
   echo "==> 生成 zip"
-  (cd "$STAGE" && zip -qr "$OUT_DIR/$BASE.zip" pikrellcam-lite)
+  (cd "$STAGE" && zip -qr "$OUT_DIR/$BASE.zip" pimotioncam)
 fi
 
 # ----------------------------------------------------------------------
@@ -209,7 +210,7 @@ fi
 echo "==> 解包自检"
 CHECKDIR="$(mktemp -d)"
 tar xzf "$TARBALL" -C "$CHECKDIR"
-PKGDIR="$CHECKDIR/pikrellcam-lite"
+PKGDIR="$CHECKDIR/pimotioncam"
 
 python3 -m compileall -q "$PKGDIR/core" "$PKGDIR/tools" >/dev/null 2>&1 || true
 if command -v node >/dev/null 2>&1; then

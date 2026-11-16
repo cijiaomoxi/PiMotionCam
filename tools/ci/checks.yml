@@ -25,7 +25,7 @@ jobs:
       - run: python tools/test_optimizations.py
       - run: cc -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer tools/test_native_sanitizer.c -ljpeg -lm -o /tmp/pkc-sanitizer && /tmp/pkc-sanitizer
       - run: PKC_NO_NATIVE=1 python tools/test_optimizations.py
-      - run: node --test tools/test_polling.cjs
-      - run: node --check static/app.js && node --check static/polling.js
+      - run: node --test tools/test_polling.cjs tools/test_i18n.cjs
+      - run: node --check static/app.js && node --check static/polling.js && node --check static/i18n.js
       - run: bash -n build_native.sh deploy.sh install.sh package.sh
       - run: bash package.sh --out /tmp/pkc-packages --no-zip

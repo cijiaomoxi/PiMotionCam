@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to pikrellcam-lite are documented in this file.
+All notable changes to PiMotionCam are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 中文
 
+- 2026-11-16 项目更名为 PiMotionCam，统一仓库、控制台、双语说明和发布包名称；版本仍为 2.8.1，现有安装路径与服务兼容。
+- 修复英文界面的默认区域名：列表、画面叠加和事件记录随语言显示“全画面 / Full frame”及“区域2 / Region 2”，保留配置和自定义名称。
 - 多区域检测按阈值和去噪参数复用计算；保留原判定、连续命中和包围盒语义。
 - 音频电平改用 int64 向量计算，保留独立工具的无 NumPy 路径。
 - 媒体统计单次扫描，状态接口共用 3 秒缓存；配额与剩余空间护栏仍读取当前值。
@@ -49,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### English
 
+- Renamed to PiMotionCam on 2026-11-16 across the repository, console, bilingual docs and release packages. The version remains 2.8.1; existing installation paths and services stay compatible.
+- Localize built-in region names in lists, overlays and event cards, preserving saved configuration and custom names when switching languages.
 - Reuse detection work across regions sharing magnitude/noise settings, preserving hit, consecutive-frame and bbox behavior.
 - Vectorize audio RMS with int64 arithmetic, retaining the no-NumPy path for standalone tools.
 - Scan media in one pass and share a three-second dashboard cache; quota and free-space guards still use current values.

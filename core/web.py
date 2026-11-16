@@ -46,7 +46,7 @@ def _make_placeholder_jpeg() -> bytes:
 _PLACEHOLDER_JPEG = _make_placeholder_jpeg()
 
 
-HELP_SECTIONS = [    {"title": "概览", "body": "pikrellcam-lite 是一个基于 libcamera/picamera2 的移动侦测录像服务，"
+HELP_SECTIONS = [    {"title": "概览", "body": "PiMotionCam 是一个基于 libcamera/picamera2 的移动侦测录像服务，"
                               "提供实时预览、运动检测录像、事件回看与网页调参。"},
     {"title": "运动检测", "body": "使用帧差分实现双算法并行检测：far 算法面向远处小而慢的目标，"
                                   "near 算法面向近处大目标。可在多个运动区域上分别判定，"

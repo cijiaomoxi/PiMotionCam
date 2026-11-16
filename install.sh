@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pikrellcam-lite 安装脚本（在树莓派上以 pi 用户运行）
+# PiMotionCam 安装脚本（在树莓派上以 pi 用户运行）
 #
 # 目录结构（每个版本独立保留，互不覆盖）：
 #   ~/pikrellcam-lite/
@@ -63,13 +63,13 @@ echo "==> 安装 systemd user service"
 mkdir -p "$HOME/.config/systemd/user"
 cat > "$HOME/.config/systemd/user/pikrellcam-lite.service" <<EOF
 [Unit]
-Description=pikrellcam-lite 移动侦测录像服务
+Description=PiMotionCam camera monitoring and recording
 After=graphical-session.target
 
 [Service]
 Type=simple
 WorkingDirectory=$ROOT/current
-ExecStart=$ROOT/venv/bin/python $ROOT/current/krellcam.py
+ExecStart=$ROOT/venv/bin/python $ROOT/current/pimotioncam.py
 Restart=always
 RestartSec=5
 # KillMode=mixed：SIGTERM 只发给主进程，ffmpeg 子进程由主进程负责收尾。

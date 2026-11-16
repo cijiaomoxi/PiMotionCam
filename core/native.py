@@ -1,4 +1,4 @@
-"""pikrellcam-lite 原生加速模块（ctypes 加载 libpkc.so）。
+"""PiMotionCam 原生加速模块（ctypes 加载 libpkc.so）。
 
 设计原则：**加速是可选的，不是必需的**。
 - 编译产物存在且能正常加载 → 走 C 内核；
@@ -103,7 +103,7 @@ def build(force: bool = False) -> tuple[bool, str]:
     cmd = [
         cc, "-O3", "-fPIC", "-shared",
         "-fno-strict-aliasing",
-        "-DPKC_VERSION_STR=\"pikrellcam-lite native %s\"" % _version(),
+        "-DPKC_VERSION_STR=\"PiMotionCam native %s\"" % _version(),
         "-o", str(_LIB), str(_SRC),
         "-ljpeg", "-lm",
     ]

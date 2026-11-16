@@ -1,6 +1,8 @@
-# v2.8.1 — 性能优化与双语说明 / Performance and bilingual documentation
+# PiMotionCam v2.8.1 — 性能优化与双语说明 / Performance and bilingual documentation
 
 ## 中文
+
+原名 pikrellcam-lite。统一项目名称、控制台与发布包，版本号保持 2.8.1；修复英文默认区域标签，配置与用户自定义名称保持原值。
 
 保留 v2.8.0 的现有功能、配置格式和 API，继续使用 Python / Flask + 可选 C 加速架构。
 
@@ -16,9 +18,11 @@
 
 原有 263 项检查、新增 17 项检查和在线 64 项回归通过；C 关闭后的回退通过；USB 与 CSI OV5647 两条路径均测试。事件与循环录像为 H.264 + AAC、10 fps，完整解码无错误，测试设置已恢复。GPIO 舵机、USB 拔盘和长期运行尚未做实机验证。
 
-**安装与升级**：下载并解压 `tar.gz` 或 `zip`，在树莓派上进入解压后的 `pikrellcam-lite` 目录，运行 `bash install.sh`。已有安装继续使用根目录的配置、媒体和虚拟环境；历史版本保存在 `releases/`。从开发电脑部署可运行 `PKC_HOST=pi@pi.local bash deploy.sh`，回滚可运行 `PKC_HOST=pi@pi.local bash deploy.sh --rollback v2.8.0`。详见[中文指南](使用文档.md)。
+**安装与升级**：下载并解压 `tar.gz` 或 `zip`，在树莓派上进入解压后的 `pimotioncam` 目录，运行 `bash install.sh`。已有安装继续使用根目录的配置、媒体和虚拟环境；历史版本保存在 `releases/`。从开发电脑部署可运行 `PKC_HOST=pi@pi.local bash deploy.sh`，回滚可运行 `PKC_HOST=pi@pi.local bash deploy.sh --rollback v2.8.0`。详见[中文指南](使用文档.md)。
 
 ## English
+
+Formerly pikrellcam-lite. The repository, console and packages now use PiMotionCam while the version stays 2.8.1. Built-in region labels follow the UI language without changing saved configuration or custom names.
 
 Retains v2.8.0 features, configuration format and APIs on the existing Python / Flask architecture with optional C acceleration.
 
@@ -34,4 +38,4 @@ Pi 4B median latency: state API **108 → 7.4 ms**; eight regions per algorithm 
 
 All 263 existing checks, 17 new checks and 64 live regression checks passed, along with the C-disabled fallback. USB and both CSI OV5647 paths were exercised. Event and loop recordings contain H.264 + AAC at 10 fps and decode without errors. Test settings were restored. Physical GPIO servos, USB unplug behavior and sustained operation were not tested.
 
-**Installation and upgrade**: download and extract the `tar.gz` or `zip`, enter the extracted `pikrellcam-lite` directory on the Pi, and run `bash install.sh`. Existing installations retain root-level configuration, media and the virtual environment; historical versions stay in `releases/`. From a development computer, use `PKC_HOST=pi@pi.local bash deploy.sh`; to roll back, use `PKC_HOST=pi@pi.local bash deploy.sh --rollback v2.8.0`. See the [English guide](USAGE.en.md).
+**Installation and upgrade**: download and extract the `tar.gz` or `zip`, enter the extracted `pimotioncam` directory on the Pi, and run `bash install.sh`. Existing installations retain root-level configuration, media and the virtual environment; historical versions stay in `releases/`. From a development computer, use `PKC_HOST=pi@pi.local bash deploy.sh`; to roll back, use `PKC_HOST=pi@pi.local bash deploy.sh --rollback v2.8.0`. See the [English guide](USAGE.en.md).
