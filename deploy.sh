@@ -93,7 +93,7 @@ echo "==> 更新 systemd 单元（让 ffmpeg 有机会正常收尾）"
 U="$HOME/.config/systemd/user/pikrellcam-lite.service"
 mkdir -p "$(dirname "$U")"
 touch "$U"
-sed -i 's/^Description=.*/Description=PiMotionCam camera monitoring and recording/' "$U"
+sed -i "s/^Description=.*/Description=PiMotionCam camera monitoring and recording/" "$U"
 if ! grep -q "^KillMode=mixed" "$U"; then
   if grep -q "^RestartSec=" "$U"; then
     sed -i "/^RestartSec=/a KillMode=mixed\nTimeoutStopSec=30" "$U"
