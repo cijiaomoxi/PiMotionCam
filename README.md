@@ -1,25 +1,23 @@
 # PiMotionCam
 
-**树莓派摄像头监测与自动录像工具。** 基于 libcamera / picamera2，支持 CSI / USB 摄像头、运动侦测、循环录像和音频录制。
+**树莓派摄像头监测与自动录像工具。** 支持 CSI / USB 摄像头、运动侦测、循环录像和音频。
 
-**Camera monitoring and automatic recording for Raspberry Pi.** Built on libcamera / picamera2, with CSI / USB cameras, motion detection, loop recording and audio.
+**Camera monitoring and automatic recording for Raspberry Pi.** Supports CSI / USB cameras, motion detection, loop recording and audio.
 
-**v2.8.1** · Raspberry Pi OS / Debian 13（64-bit） · 简体中文 / English · [MIT](LICENSE)
-
-## 功能 / Features
+**v2.8.2** · Raspberry Pi OS / Debian 13（64-bit） · 简体中文 / English · [MIT](LICENSE)
 
 | 中文 | English |
 | --- | --- |
-| MJPEG 实时预览、浏览器 OSD、多区域编辑、far / near 双算法 | MJPEG live preview, browser OSD, editable regions and dual far / near detection |
-| 事件预录与补录、暂停、倒计时、整帧与目标缩略图 | Event pre/post-roll, pause, countdown and full-frame/object thumbnails |
-| 分段循环录像、事件优先、MP4 + AAC 音频与电平表 | Segmented loop recording, event priority, MP4 + AAC audio and level meter |
-| 成像调节、配置与区域预设、延时摄影、云台舵机 | Imaging controls, settings/region presets, timelapse and pan/tilt servos |
-| 定时命令、FIFO、事件钩子、媒体管理、归档与日志 | Scheduled commands, FIFO, event hooks, media management, archiving and logs |
-| 密码登录、中英切换、外部存储检查、容量护栏、版本回滚 | Password login, language switch, external-storage checks, disk guards and rollback |
+| MJPEG 实时预览、可编辑侦测区域、far / near 双算法 | MJPEG preview, editable detection regions and dual far / near detection |
+| 事件预录与补录、手动录像、运动抓拍、事件缩略图 | Event pre/post-roll, manual recording, motion photos and thumbnails |
+| 分段循环录像、事件优先、MP4 + AAC 音轨 | Segmented loop recording, event priority and MP4 + AAC sound |
+| 浏览器实时音频、麦克风增益、声音触发、独立 MP3 录制 | Live browser audio, microphone gain, sound triggers and audio-only MP3 |
+| CSI / USB 旋转与镜像；可选软件方向分析、矢量显示和统计 | CSI / USB rotation and mirroring; optional software direction, vectors and statistics |
+| 延时摄影、云台与位置预设、日出日落及定时命令 | Timelapse, pan/tilt presets, solar schedules and scheduled commands |
+| 配置预设、事件钩子、FIFO、可选签名 TCP / 组播控制 | Settings presets, hooks, FIFO and optional signed TCP / multicast control |
+| USB / 外部存储、日历归档、空间保护、密码与中英界面 | External storage, calendar archives, disk guards, password protection and bilingual UI |
 
-## 安装与访问 / Install and open
-
-在树莓派上执行 / Run on your Raspberry Pi:
+## 安装 / Install
 
 ```bash
 git clone https://github.com/cijiaomoxi/PiMotionCam.git
@@ -27,40 +25,36 @@ cd PiMotionCam
 bash install.sh
 ```
 
-打开 **http://pi.local:8080/**，或使用树莓派 IP。右上角切换语言。音频默认关闭，可在「媒体 → 音频」启用并选择麦克风。
+打开 / Open **`http://<树莓派IP / Pi-IP>:8080`**。安装器沿用 `pikrellcam-lite.service` 和 `~/pikrellcam-lite`，以便保留原配置、媒体及历史版本。
 
-Open **http://pi.local:8080/** or your Pi's IP address. Switch languages in the top bar. Audio is off by default; enable it and select a microphone under **Media → Audio**.
-
-## 升级与回滚 / Upgrade and rollback
-
-已有安装沿用原配置、媒体、日志和虚拟环境；每个版本保存在 `releases/`，由 `current` 选择。以下命令在开发电脑执行，SSH 密钥路径按实际情况填写。
-
-Existing installs retain configuration, media, logs and the virtual environment. Versions stay in `releases/`, selected by `current`. Run these on your development computer with your SSH key path.
+The installer retains `pikrellcam-lite.service` and `~/pikrellcam-lite` for existing configurations, recordings and release history.
 
 ```bash
-export PKC_HOST=pi@pi.local PKC_KEY="$HOME/.ssh/id_ed25519"
-bash deploy.sh
-bash deploy.sh --list
-bash deploy.sh --rollback v2.8.0
+systemctl --user status pikrellcam-lite
+journalctl --user -u pikrellcam-lite -f
 ```
 
-## 文档与版本 / Documentation and release
+升级现有设备 / Upgrade an existing device:
 
-- 使用 / Usage：[中文手册](docs/使用文档.md) · [English guide](docs/USAGE.en.md)
-- 技术 / Technical：[中文](README.zh-CN.md) · [English](README.en.md)
-- 更新 / Updates：[更新日志 / Changelog](CHANGELOG.md) · [发布包 / Releases](https://github.com/cijiaomoxi/PiMotionCam/releases)
-- 验证 / Validation：[性能与实机验证 / Performance and hardware checks](docs/PERFORMANCE.md) · [上游功能对照 / Upstream coverage](docs/上游功能对照.md)
+```bash
+PKC_HOST=pi@<Pi-IP> bash deploy.sh
+```
 
-v2.8.1 优化多区域检测、音频电平、媒体统计和网页轮询，修复录像时序及暂停控制；保留 Python / Flask + 可选 C 加速，兼容原配置与 API。
+## 文档 / Documentation
 
-v2.8.1 improves multi-region detection, audio metering, media statistics and browser polling, and fixes recording timing and pause controls while retaining Python / Flask, optional C acceleration and configuration/API compatibility.
+- [中文说明](README.zh-CN.md) · [English overview](README.en.md)
+- [中文使用手册](docs/使用文档.md) · [English guide](docs/USAGE.en.md)
+- [2.8.2 新功能与操作 / New features and controls](docs/V2.8.2.md)
+- [上游功能与差异 / Upstream coverage and differences](docs/上游功能对照.md)
+- [更新日志 / Changelog](CHANGELOG.md) · [发布 / Releases](https://github.com/cijiaomoxi/PiMotionCam/releases)
+- [性能与验证 / Performance and validation](docs/PERFORMANCE.md) · [2.8.2 验证记录 / Validation record](docs/V2.8.2-VALIDATION.md)
 
-## 已知限制 / Limitations
+## 兼容性 / Compatibility
 
-尚不支持浏览器实时音频、声音触发录像和 MMAL 硬件运动矢量；USB MJPEG 通路不支持旋转与镜像。
+保留 libcamera / picamera2、Python / Flask 和可选 C 加速。USB 无变换时继续使用 MJPEG 直通；旋转、软件效果、防抖和录像内字幕会增加处理开销，均可按需启用。实时音频需要可用的 ALSA 采集设备，先启用监听，再点击播放。
 
-Live audio streaming, sound-triggered recording and MMAL motion vectors are not implemented. USB MJPEG capture does not support rotation or mirroring.
+Uses libcamera / picamera2, Python / Flask and optional C acceleration. USB MJPEG remains passthrough when no transform is requested. Rotation, effects, stabilization and burned-in captions add processing and are optional. Live audio requires a working ALSA capture device; enable monitoring, then click Listen live.
 
-参考 **Bill Wilson** 的 [PiKrellCam](https://github.com/billw2/pikrellcam) 功能设计，本项目为非官方独立实现。PiMotionCam 使用 MIT 许可，上游使用 GPL-3.0。
+本项目为参考 [Bill Wilson 的 PiKrellCam](https://github.com/billw2/pikrellcam) 功能设计的独立实现。现代系统不支持旧 MMAL 硬件运动矢量；软件方向分析、效果和签名网络协议不宣称与旧实现完全相同。新功能的实机验证状态见验证记录。
 
-Inspired by **Bill Wilson's** [PiKrellCam](https://github.com/billw2/pikrellcam). This is an unofficial, independent implementation. PiMotionCam uses MIT; upstream uses GPL-3.0.
+An independent implementation inspired by [Bill Wilson’s PiKrellCam](https://github.com/billw2/pikrellcam). Modern systems do not provide legacy MMAL hardware vectors. Software analysis/effects and the signed network protocol do not claim exact equivalence. See the validation record for hardware testing status. PiMotionCam uses MIT; upstream uses GPL-3.0.

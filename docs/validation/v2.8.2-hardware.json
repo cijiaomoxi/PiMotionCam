@@ -1,0 +1,488 @@
+[
+  {
+    "name": "CSI baseline v2.8.2",
+    "detail": {
+      "fps": 29.5,
+      "detect_fps": 9.1,
+      "jpeg_ms": 0.1,
+      "error": null
+    }
+  },
+  {
+    "name": "USB detected",
+    "detail": {
+      "backend": "v4l2",
+      "device": "/dev/video1",
+      "id": "/dev/video1",
+      "index": 2,
+      "model": "USB Camera: USB Camera (usb-0000:01:00.0-1.1):",
+      "type": "usb"
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 0,
+      "flip": "none",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 0,
+      "flip": "horizontal",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 0,
+      "flip": "vertical",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 0,
+      "flip": "both",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 90,
+      "flip": "none",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 90,
+      "flip": "horizontal",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 90,
+      "flip": "vertical",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 90,
+      "flip": "both",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 180,
+      "flip": "none",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 180,
+      "flip": "horizontal",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 180,
+      "flip": "vertical",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 180,
+      "flip": "both",
+      "jpeg_size": [
+        640,
+        480
+      ],
+      "reported": [
+        640,
+        480
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 270,
+      "flip": "none",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 270,
+      "flip": "horizontal",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 270,
+      "flip": "vertical",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "USB transform",
+    "detail": {
+      "rotation": 270,
+      "flip": "both",
+      "jpeg_size": [
+        480,
+        640
+      ],
+      "reported": [
+        480,
+        640
+      ]
+    }
+  },
+  {
+    "name": "Microphones",
+    "detail": [
+      {
+        "card": 3,
+        "card_name": "Microphone [Usb Microphone]",
+        "device": 0,
+        "id": "hw:3,0",
+        "is_usb": true,
+        "name": "USB Audio [USB Audio]",
+        "plug_id": "plughw:3,0",
+        "port": "1.4",
+        "usb": "usb-0000:01:00.0-1.4"
+      },
+      {
+        "card": 4,
+        "card_name": "Camera [USB Camera]",
+        "device": 0,
+        "id": "hw:4,0",
+        "is_usb": true,
+        "name": "USB Audio [USB Audio]",
+        "plug_id": "plughw:4,0",
+        "port": "1.1",
+        "usb": "usb-0000:01:00.0-1.1"
+      }
+    ]
+  },
+  {
+    "name": "Live microphone",
+    "detail": {
+      "device": "plughw:3,0",
+      "bytes": 8192,
+      "peak": 5524,
+      "rate": "16000"
+    }
+  },
+  {
+    "name": "Listener release",
+    "detail": {
+      "live_clients": 0,
+      "running": false
+    }
+  },
+  {
+    "name": "MP3 real microphone",
+    "detail": {
+      "device": "plughw:3,0",
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "mp3"
+        }
+      ],
+      "format": {
+        "duration": "1.980000"
+      }
+    }
+  },
+  {
+    "name": "Live microphone",
+    "detail": {
+      "device": "plughw:4,0",
+      "bytes": 8192,
+      "peak": 6745,
+      "rate": "16000"
+    }
+  },
+  {
+    "name": "Listener release",
+    "detail": {
+      "live_clients": 0,
+      "running": false
+    }
+  },
+  {
+    "name": "MP3 real microphone",
+    "detail": {
+      "device": "plughw:4,0",
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "mp3"
+        }
+      ],
+      "format": {
+        "duration": "1.980000"
+      }
+    }
+  },
+  {
+    "name": "Manual video + AAC",
+    "detail": {
+      "event": "manual_20261116_143118_000003",
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 640,
+          "height": 480
+        },
+        {
+          "codec_name": "aac"
+        }
+      ],
+      "format": {
+        "duration": "3.100000"
+      }
+    }
+  },
+  {
+    "name": "Sound trigger",
+    "detail": {
+      "id": "motion_20261116_143125_000004",
+      "algorithm": "audio",
+      "frames": 61
+    }
+  },
+  {
+    "name": "CSI separate still",
+    "detail": {
+      "name": "still_20261116_143338_000005.jpg",
+      "size": [
+        2592,
+        1944
+      ]
+    }
+  },
+  {
+    "name": "Restored user settings",
+    "detail": {
+      "camera": {
+        "backend": "rpicam",
+        "device": "",
+        "flip": "none",
+        "format": "MJPEG",
+        "id": "/base/soc/i2c0mux/i2c@1/ov5647@36",
+        "imaging": {
+          "awb": "auto",
+          "awb_b_gain": 0,
+          "awb_r_gain": 0,
+          "brightness": 50,
+          "contrast": 0,
+          "denoise": "auto",
+          "ev": 0,
+          "exposure": "normal",
+          "iso": 0,
+          "metering": "centre",
+          "saturation": 0,
+          "sharpness": 0,
+          "shutter": 0,
+          "zoom": 100
+        },
+        "imaging_applied": true,
+        "index": 0,
+        "is_rpi": true,
+        "model": "ov5647",
+        "resolution": [
+          1280,
+          720
+        ],
+        "rotation": 0,
+        "type": "csi"
+      },
+      "record": {
+        "elapsed": 0.0,
+        "loop_recording": false,
+        "loop_remaining": null,
+        "manual": false,
+        "paused": true,
+        "recording": false,
+        "remaining": null
+      },
+      "audio": {
+        "audio_record": {
+          "error": "",
+          "file": "audio_20261116_143114_000002.mp3",
+          "recording": false,
+          "started_at": 1794810674.9200552
+        },
+        "bitrate": 64,
+        "buffer_seconds": 180,
+        "channels": 1,
+        "configured_device": "auto",
+        "device": "plughw:4,0",
+        "devices": [
+          {
+            "card": 3,
+            "card_name": "Microphone [Usb Microphone]",
+            "device": 0,
+            "id": "hw:3,0",
+            "is_usb": true,
+            "name": "USB Audio [USB Audio]",
+            "plug_id": "plughw:3,0",
+            "port": "1.4",
+            "usb": "usb-0000:01:00.0-1.4"
+          },
+          {
+            "card": 4,
+            "card_name": "Camera [USB Camera]",
+            "device": 0,
+            "id": "hw:4,0",
+            "is_usb": true,
+            "name": "USB Audio [USB Audio]",
+            "plug_id": "plughw:4,0",
+            "port": "1.1",
+            "usb": "usb-0000:01:00.0-1.1"
+          }
+        ],
+        "enabled": false,
+        "error": "",
+        "gain_db": 0,
+        "level": 0.0,
+        "live_clients": 0,
+        "rate": 16000,
+        "running": false,
+        "state": "idle",
+        "stream_enabled": false,
+        "trigger_enabled": false,
+        "trigger_level": 0.2,
+        "trigger_seconds": 0.3
+      }
+    }
+  }
+]

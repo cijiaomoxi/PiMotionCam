@@ -25,7 +25,7 @@ def _angle_to_pulse(angle: float) -> int:
 
 
 class Servo:
-    def __init__(self, config, state, log=None):
+    def __init__(self, config, state, log=None, on_move=None, on_preset=None):
         self.config = config
         self.state = state
         self.log = log or (lambda *a, **k: None)
@@ -33,6 +33,11 @@ class Servo:
         self._backend = None
         self._pwms = {}
         self._current = {"pan": None, "tilt": None}
+        self.on_move, self.on_preset = on_move, on_preset
+        self._move_lock = threading.RLock()
+        self._scan_stop = threading.Event()
+        self._scan_thread = None
+        self._chip = None
 
     # ------------------------------------------------------------------
     def _detect_backend(self) -> str:
@@ -71,6 +76,7 @@ class Servo:
             "pan_max": self.config.get("servo", "pan_max", default=180),
             "tilt_min": self.config.get("servo", "tilt_min", default=0),
             "tilt_max": self.config.get("servo", "tilt_max", default=180),
+            "scanning": bool(self._scan_thread and self._scan_thread.is_alive()),
         }
 
     # ------------------------------------------------------------------
@@ -94,20 +100,37 @@ class Servo:
                         pwm.start(0)
                         self._pwms[key] = pwm
             self.state.set("servo_enabled", True)
+            if backend == "lgpio" and self._chip is None:
+                import lgpio
+                try:
+                    self._chip = lgpio.gpiochip_open(int(self.config.get("servo", "gpiochip", default=0)))
+                    for axis in ("pan", "tilt"):
+                        lgpio.gpio_claim_output(self._chip, int(self.config.get("servo", axis+"_pin")))
+                except Exception:
+                    if self._chip is not None:
+                        lgpio.gpiochip_close(self._chip)
+                    self._chip = None
+                    self.state.set("servo_enabled", False)
+                    raise
         self.log(f"servo enabled, backend={backend}")
         return {"ok": True, "backend": backend}
 
     def disable(self) -> dict:
+        self.scan(False)
         with self._lock:
             if self._backend == "rpi" and self._pwms:
                 try:
                     import RPi.GPIO as GPIO
                     for pwm in self._pwms.values():
                         pwm.stop()
-                    GPIO.cleanup()
+                    GPIO.cleanup([self.config.get("servo", "pan_pin"), self.config.get("servo", "tilt_pin")])
                 except Exception:
                     pass
             self._pwms.clear()
+            if self._chip is not None:
+                import lgpio
+                lgpio.gpiochip_close(self._chip)
+                self._chip = None
             self._backend = None
             self.state.set("servo_enabled", False)
         return {"ok": True}
@@ -115,6 +138,10 @@ class Servo:
     # ------------------------------------------------------------------
     def set_angle(self, pan: float | None = None, tilt: float | None = None,
                   smooth_ms: int | None = None) -> dict:
+        with self._move_lock:
+            return self._set_angle(pan, tilt, smooth_ms)
+
+    def _set_angle(self, pan, tilt, smooth_ms):
         if not self.state.get("servo_enabled"):
             self.enable()
         if self.backend == "none":
@@ -126,12 +153,15 @@ class Servo:
         tilt_max = float(self.config.get("servo", "tilt_max", default=180))
 
         target = {}
+        if self.on_move:
+            self.on_move(float(self.config.get("motion", "settle_seconds", default=1)) +
+                         max(0, int(smooth_ms or self.config.get("servo", "smooth_ms", default=0)))/1000)
         if pan is not None:
             target["pan"] = max(pan_min, min(pan_max, float(pan)))
         if tilt is not None:
             target["tilt"] = max(tilt_min, min(tilt_max, float(tilt)))
 
-        smooth = int(smooth_ms if smooth_ms is not None else self.config.get("servo", "smooth_ms", default=0) or 0)
+        smooth = max(0, min(5000, int(smooth_ms if smooth_ms is not None else self.config.get("servo", "smooth_ms", default=0) or 0)))
         if smooth > 0 and self._current.get("pan") is not None:
             self._smooth_move(target, smooth)
         else:
@@ -154,6 +184,8 @@ class Servo:
             time.sleep(0.02)
 
     def _write(self, key: str, angle: float):
+        if self.config.get("servo", key+"_invert", default=False):
+            angle = 180-angle
         pulse = _angle_to_pulse(angle)
         if self.backend == "rpi":
             pwm = self._pwms.get(key)
@@ -164,16 +196,59 @@ class Servo:
             try:
                 with open("/dev/servoblaster", "w") as fh:
                     fh.write(f"{pin}={pulse}\n")
-            except Exception:
-                pass
+            except Exception as exc:
+                raise OSError("ServoBlaster output failed") from exc
+        elif self.backend == "lgpio":
+            import lgpio
+            lgpio.tx_servo(self._chip, int(self.config.get("servo", key+"_pin")), pulse, 50)
 
     # ------------------------------------------------------------------
     def goto(self, name: str) -> dict:
         positions = self.config.get("servo", "positions", default=[]) or []
         for p in positions:
             if p.get("name") == name:
-                return self.set_angle(p.get("pan"), p.get("tilt"))
+                result = self.set_angle(p.get("pan"), p.get("tilt"))
+                if result.get("ok") and p.get("preset") and self.on_preset:
+                    self.on_preset(p["preset"])
+                return result
         return {"ok": False, "error": f"没有名为 {name} 的位置预设"}
+
+    def step(self, axis, direction=1, multiple=False):
+        if axis not in ("pan", "tilt"):
+            raise ValueError("Unknown servo axis")
+        amount = float(self.config.get("servo", "step_degrees", default=2))
+        if multiple:
+            amount *= max(1, min(50, int(self.config.get("servo", "multi_steps", default=5))))
+        current = self._current.get(axis)
+        return self.set_angle(**{axis: (90 if current is None else current) + amount*(1 if float(direction)>0 else -1)})
+
+    def scan(self, enabled=True):
+        self._scan_stop.set()
+        if self._scan_thread and self._scan_thread is not threading.current_thread():
+            self._scan_thread.join(timeout=6)
+        if not enabled:
+            return {"ok": True, "scanning": False}
+        if not (self.config.get("servo", "positions", default=[]) or []):
+            raise ValueError("No servo positions are configured")
+        self._scan_stop.clear()
+        def worker():
+            while not self._scan_stop.is_set():
+                positions = self.config.get("servo", "positions", default=[]) or []
+                if not positions:
+                    return
+                for position in positions:
+                    if self._scan_stop.is_set():
+                        return
+                    try:
+                        if not self.goto(position["name"]).get("ok"):
+                            return
+                    except Exception as exc:
+                        self.log("servo scan: %s" % exc)
+                        return
+                    self._scan_stop.wait(max(1, float(self.config.get("servo", "scan_seconds", default=10))))
+        self._scan_thread = threading.Thread(target=worker, name="servo-scan", daemon=True)
+        self._scan_thread.start()
+        return {"ok": True, "scanning": True}
 
     def save_position(self, name: str, pan: float, tilt: float, preset: str = "") -> dict:
         positions = list(self.config.get("servo", "positions", default=[]) or [])

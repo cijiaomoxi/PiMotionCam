@@ -2,7 +2,8 @@
 
 Written for users who already have a Raspberry Pi and want to install and run a motion-detection recording service on it.
 
-- Applies to: **v2.8.1** · [中文](使用文档.md) · [Bilingual project home](../README.md)
+- [2.8.2 controls and limits](V2.8.2.md) · [Validation status](V2.8.2-VALIDATION.md)
+- Applies to: **v2.8.2** · [中文](使用文档.md) · [Bilingual project home](../README.md)
 - Web interface: **http://pi.local:8080/**
 - Companion document: technical internals and design rationale live in [README.en.md](../README.en.md). This guide covers "how do I install it and use it".
 - Acknowledgements and reference: <https://github.com/billw2/pikrellcam> — this is an independent, unofficial implementation; see "Acknowledgements and References" in the repository root `README.md`.
@@ -243,7 +244,7 @@ Go to **Detection Tuning** → **Camera Parameters**:
   - `90` and `270` require a transpose the ISP cannot perform, so capture automatically switches to the raw RGB path and rotates in software, using slightly more CPU.
 - **Flip**: `none` / `horizontal` / `vertical` / `both`.
 
-> Rotation and flip are not supported on the USB path: USB uses MJPEG passthrough, and transforming the image would require decoding and re-encoding. The setting is kept in the configuration but has no effect, and a note appears in the log.
+> Since v2.8.2, USB MJPEG rotation and mirroring transform the real frames. These options decode/re-encode; untransformed native MJPEG remains passthrough.
 
 ### 4.5 Confirm the Picture Is Healthy
 
@@ -763,11 +764,7 @@ curl -X POST http://pi.local:8080/api/imaging -H 'Content-Type: application/json
   -d '{"values":{"brightness":60,"contrast":10,"awb":"daylight","saturation":-100}}'
 ```
 
-> **Not implemented**: the 21 MMAL image effects of the upstream build (oil painting, cartoon, …) and its colour
-> effects. Those are MMAL-specific and have no counterpart in libcamera / rpicam-vid / V4L2; doing them in
-> software would mean decoding and re-encoding every frame, which contradicts this project's "no extra
-> per-frame cost" principle. The one effect that actually matters for surveillance — **greyscale** — is already
-> covered by `saturation = -100`.
+> v2.8.2 adds optional software effects, crop and small-translation stabilization. These decode/re-encode frames and do not exactly reproduce MMAL. See [new controls](V2.8.2.md).
 
 ---
 
@@ -969,14 +966,7 @@ encoder and must not be blocked, so the ffmpeg run happens after the recording h
 
 ### 8.8 Limits and Caveats
 
-- **No live audio in the browser.** The upstream's `www/audio_stream.php` (listening to the live audio in the web
-  interface) is not implemented.
-- **No audio-triggered recording.** The upstream's `audio_trigger_video` / `audio_trigger_level` are separate
-  subsystems and are not implemented either.
-- **No gain setting.** The upstream's `audio_gain_dB` has no counterpart here: the gain is a property of the device
-  and is set with `alsamixer`.
-- **MP4 with AAC, always.** The upstream's `box_MP3_only` is not implemented; the output is always MP4 with an AAC
-  track.
+- v2.8.2 adds browser live audio, software gain, sound triggers and audio-only MP3. See [new controls](V2.8.2.md).
 - **The microphone is exclusive.** `arecord` takes the device exclusively, so no other program (a player, a voice
   assistant) may hold it while the service runs.
 - **The ring buffer lives in memory** — about 5.8 MB for the default 180 seconds at 16 kHz mono.
@@ -1628,7 +1618,7 @@ After publishing to GitHub, users download the archive, extract it, and follow [
 
 ```bash
 # On the Raspberry Pi
-tar xzf pimotioncam-v2.8.1-YYYYMMDD.tar.gz
+tar xzf pimotioncam-v2.8.2-YYYYMMDD.tar.gz
 cd pimotioncam
 bash install.sh
 ```

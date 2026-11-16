@@ -10,6 +10,7 @@
 /venv/
 /.venv/
 /config.local.json
+/.media-sequence
 
 # Python
 __pycache__/

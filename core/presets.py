@@ -11,10 +11,11 @@ import time
 
 
 class Presets:
-    def __init__(self, config, state, on_camera_changed=None):
+    def __init__(self, config, state, on_camera_changed=None, on_activate=None):
         self.config = config
         self.state = state
         self.on_camera_changed = on_camera_changed
+        self.on_activate = on_activate
         self._lock = threading.Lock()
 
     def list(self) -> dict:
@@ -53,15 +54,38 @@ class Presets:
             raise KeyError(f"预设不存在: {name}")
         payload = presets[name]
         with self._lock:
-            old_res = self.config.get("camera", "resolution")
-            old_fps = self.config.get("camera", "fps")
+            old_camera = copy.deepcopy(self.config.get("camera"))
             self.config.set(payload)
-            new_res = self.config.get("camera", "resolution")
-            new_fps = self.config.get("camera", "fps")
             self.state.set("preset", name)
-            if (old_res, old_fps) != (new_res, new_fps) and self.on_camera_changed:
+            if old_camera != self.config.get("camera") and self.on_camera_changed:
                 try:
                     self.on_camera_changed()
                 except Exception:
                     pass
+            if self.on_activate:
+                self.on_activate()
         return self.config.snapshot()
+
+    def transfer(self, source, target, move=False, section=None):
+        if not str(target or "").strip() or source == target:
+            raise ValueError("Choose a different destination name")
+        with self._lock:
+            presets = copy.deepcopy(self.list())
+            if source not in presets:
+                raise KeyError(source)
+            if section:
+                if section not in presets[source]:
+                    raise KeyError(section)
+                presets.setdefault(target, {})[section] = copy.deepcopy(presets[source][section])
+                if move:
+                    del presets[source][section]
+            else:
+                if target in presets:
+                    raise ValueError("The destination preset already exists")
+                presets[target] = copy.deepcopy(presets[source])
+                if move:
+                    del presets[source]
+            self.config.set({"presets": presets}, replace=True)
+            if move and not section and self.state.get("preset") == source:
+                self.state.set("preset", target)
+            return presets

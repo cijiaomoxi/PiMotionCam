@@ -1,6 +1,6 @@
 """Web API 与页面路由。
 
-覆盖官方 PiKrellCam 的全部网页能力：实时预览（OSD 叠加）、运动区域图形化编辑、
+提供实时预览（OSD 叠加）、运动区域图形化编辑、
 双算法灵敏度、预设切换、事件/录像/抓拍/延时摄影管理、定时命令、舵机、
 系统日志、升级、帮助、密码保护。
 """
@@ -27,6 +27,8 @@ from .i18n import translate as i18n_translate
 from .storage import check_target, disk_usage
 from .media_stats import MediaStatsCache, list_media
 from .util import human_size, run_command, tail_file
+from .extended_web import register_extensions, validate_patch
+from .media_tools import archive_event, safe_path
 
 def _make_placeholder_jpeg() -> bytes:
     """相机无帧时用于占位的深灰图，保证 MJPEG 响应能立即开始。"""
@@ -74,6 +76,7 @@ def create_app(service) -> Flask:
     # 浏览器还会拿旧的 app.js / style.css，界面上的新功能死活不出现。
     # 管理界面在内网、文件也不大，每次回源完全够用。
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+    app.config["MAX_CONTENT_LENGTH"] = 512 * 1024
     media_stats = MediaStatsCache(max_age=3.0)
     version = _version()  # Running code cannot change until the process restarts.
 
@@ -132,10 +135,13 @@ def create_app(service) -> Flask:
 
     @app.route("/media/<kind>/<path:name>")
     def media(kind, name):
-        folder = {"videos": "videos", "stills": "stills", "timelapse": "timelapse"}.get(kind)
+        folder = {"videos": "videos", "stills": "stills", "timelapse": "timelapse", "audio": "audio"}.get(kind)
         if not folder:
             return ("not found", 404)
-        path = service.config.media_sub(folder) / name
+        try:
+            path = safe_path(service.config.media_sub(folder), name)
+        except ValueError:
+            return ("not found", 404)
         if not path.exists() or not path.is_file():
             return ("not found", 404)
         return send_file(str(path), conditional=True)
@@ -248,6 +254,8 @@ def create_app(service) -> Flask:
         st["loop"] = service.recorder.loop_stats()
         st["record"] = service.recorder.record_status()
         st["audio"] = service.audio_status()
+        last_frame = st.get("last_frame_at")
+        st["preview_stalled"] = bool(st.get("running") and last_frame and time.time()-last_frame > 3)
         return jsonify(st)
 
     @app.route("/api/config", methods=["GET"])
@@ -257,11 +265,17 @@ def create_app(service) -> Flask:
     @app.route("/api/config", methods=["POST"])
     def api_config_post():
         data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify(ok=False, error="Settings must be an object"), 400
         patch = {k: v for k, v in data.items() if k in (
             "camera", "motion", "record", "timelapse", "web", "media", "servo",
-            "hooks", "loop")}
+            "hooks", "loop", "location", "network")}
         if not patch:
             return jsonify({"ok": False, "error": "没有可更新的配置段"}), 400
+        try:
+            validate_patch(patch, service.config)
+        except (ValueError, TypeError, KeyError) as exc:
+            return jsonify(ok=False, error=str(exc)), 400
         if "web" in patch and "password_hash" in patch["web"]:
             patch["web"].pop("password_hash")
         # 采集链路相关的键变化时都要重建管线：
@@ -272,6 +286,12 @@ def create_app(service) -> Flask:
         new_cam = {k: service.config.get("camera", k) for k in _CAM_KEYS}
         if "camera" in patch and new_cam != old_cam:
             service._restart_camera()
+        if "record" in patch and any(key.startswith("audio_") for key in patch["record"]):
+            service.apply_audio_config()
+        if "network" in patch and hasattr(service, "control"):
+            service.control.start()
+        if "location" in patch:
+            service.scheduler.reload()
         return jsonify({"ok": True, "config": service.config.snapshot()})
 
     @app.route("/api/config/reset", methods=["POST"])
@@ -287,12 +307,72 @@ def create_app(service) -> Flask:
     def api_audio_get():
         return jsonify(service.audio_status())
 
+    @app.route("/api/audio/stream")
+    def api_audio_stream():
+        if request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return jsonify({"ok": False, "error": "Cross-site audio requests are not allowed"}), 403
+        try:
+            capture, release = service.acquire_audio("live")
+        except PermissionError:
+            return jsonify({"ok": False, "code": "disabled", "error": "Live audio is disabled"}), 409
+        except RuntimeError as exc:
+            return jsonify({"ok": False, "code": "unavailable", "error": str(exc)}), 503
+        status = capture.status()
+        stream = capture.live_pcm(idle_timeout=4.0)
+        try:
+            first = next(stream)
+        except StopIteration:
+            release()
+            return jsonify({"ok": False, "code": "unavailable", "error": "No microphone samples received"}), 503
+
+        def generate():
+            try:
+                if service.config.get("record", "audio_stream_enabled", default=False):
+                    yield first
+                for chunk in stream:
+                    if not service.config.get("record", "audio_stream_enabled", default=False):
+                        break
+                    yield chunk
+            finally:
+                stream.close()
+                release()
+
+        response = app.response_class(generate(), mimetype="application/octet-stream")
+        response.headers.update({"Cache-Control": "no-store", "X-Accel-Buffering": "no",
+                                 "Cross-Origin-Resource-Policy": "same-origin",
+                                 "X-Audio-Format": "s16le", "X-Audio-Rate": str(status["rate"]),
+                                 "X-Audio-Channels": str(status["channels"])})
+        response.call_on_close(release)
+        return response
+
     @app.route("/api/audio", methods=["POST"])
     def api_audio_post():
         data = request.get_json(silent=True) or {}
         patch: dict = {}
         if "enabled" in data:
             patch["audio_enabled"] = bool(data["enabled"])
+        if "stream_enabled" in data:
+            patch["audio_stream_enabled"] = bool(data["stream_enabled"])
+        if "gain_db" in data:
+            try:
+                import math
+                if not math.isfinite(float(data["gain_db"])):
+                    raise ValueError()
+                patch["audio_gain_db"] = max(-30.0, min(30.0, float(data["gain_db"])))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "Invalid audio gain"}), 400
+        if "trigger_enabled" in data:
+            patch["audio_trigger_enabled"] = bool(data["trigger_enabled"])
+        for key, lower, upper in (("trigger_level", .001, 1.), ("trigger_seconds", 0., 10.)):
+            if key in data:
+                try:
+                    value = float(data[key])
+                    import math
+                    if not math.isfinite(value):
+                        raise ValueError()
+                    patch["audio_"+key] = max(lower, min(upper, value))
+                except (TypeError, ValueError):
+                    return jsonify(ok=False, error="Invalid audio trigger value"), 400
         if "device" in data:
             patch["audio_device"] = str(data["device"] or "auto")
         if "rate" in data:
@@ -411,6 +491,7 @@ def create_app(service) -> Flask:
     def api_motion():
         enabled = bool((request.get_json(silent=True) or {}).get("enabled", True))
         service.config.set({"motion": {"enabled": enabled}})
+        service.hooks.fire("on_motion_enable", {"id": str(enabled)})
         return jsonify({"ok": True, "enabled": enabled})
 
     @app.route("/api/regions", methods=["GET"])
@@ -546,6 +627,12 @@ def create_app(service) -> Flask:
 
     @app.route("/api/still", methods=["POST"])
     def api_still():
+        if hasattr(service, "capture_still"):
+            try:
+                name = service.capture_still()
+                return jsonify(ok=True, name=name, url=url_for("media", kind="stills", name=name))
+            except (OSError, RuntimeError, ValueError) as exc:
+                return jsonify(ok=False, error=str(exc)), 409
         frame = service.camera.latest
         if not frame:
             return jsonify({"ok": False, "error": "没有可用帧"}), 400
@@ -742,20 +829,22 @@ def create_app(service) -> Flask:
 
     @app.route("/api/archive", methods=["POST"])
     def api_archive():
-        """把事件录像复制到远端（对应官方 NFS Archive）。"""
+        """Archive a known event to SSH or a verified calendar directory."""
         data = request.get_json(silent=True) or {}
         eid = data.get("id")
         target = data.get("target") or service.config.get("media", "archive_target", default="")
         if not eid or not target:
             return jsonify({"ok": False, "error": "缺少 id 或未配置归档目标"}), 400
-        src = service.config.media_sub("videos") / f"{eid}.mp4"
-        if not src.exists():
+        entry = next((event for event in service.recorder.events if event["id"] == eid), None)
+        if entry is None:
             return jsonify({"ok": False, "error": "录像不存在"}), 404
-        cmd = f"scp -q {src.name} {target}"
-        rc, out, err = run_command(cmd, timeout=600, cwd=str(src.parent))
-        if rc != 0:
-            return jsonify({"ok": False, "error": err.strip()[:400] or "scp 失败"}), 500
-        return jsonify({"ok": True, "target": target})
+        source = str(service.config.media_sub("videos") / entry["video"])
+        if source in getattr(service.recorder, "_mux_pending", set()):
+            return jsonify(ok=False, error="The audio track is still being finalized; retry shortly"), 409
+        try:
+            return jsonify(ok=True, **archive_event(service.config, entry, target))
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            return jsonify(ok=False, error=str(exc)), 409
 
     # ------------------------------------------------------------------
     # 定时命令 / 内部命令
@@ -825,13 +914,14 @@ def create_app(service) -> Flask:
         data = request.get_json(silent=True) or {}
         patch = {k: str(v) for k, v in data.items()
                  if k in ("on_motion_begin", "on_motion_end",
-                          "on_motion_preview_save", "on_timelapse_end")}
+                          "on_motion_preview_save", "on_timelapse_end", "on_startup", "on_motion_enable",
+                          "on_loop_end", "on_manual_end", "on_still_capture", "on_multicast_pkc_message")}
         service.config.set({"hooks": patch})
         return jsonify({"ok": True, "hooks": service.config.get("hooks")})
 
     @app.route("/api/log")
     def api_log():
-        lines = tail_file(service.log_file, 300)
+        lines = tail_file(service.log_file, max(20, min(5000, int(service.config.get("web", "log_lines", default=300)))))
         return jsonify({"lines": lines})
 
     @app.route("/api/upgrade", methods=["POST"])
@@ -884,6 +974,7 @@ def create_app(service) -> Flask:
             "uptime_file": _uptime(),
         })
 
+    register_extensions(app, service)
     return app
 
 

@@ -40,12 +40,12 @@ test('custom names and event-region identifiers are preserved', () => {
   }
 });
 
-test('both language packs use the new product name and version remains 2.8.1', () => {
+test('both language packs use the new product name and version is 2.8.2', () => {
   for (const language of ['en-US', 'zh-CN']) {
     const ui = locale(language);
     assert.match(ui.t('app.title'), /^PiMotionCam /);
     assert.match(ui.t('app.titleLogin'), /^PiMotionCam /);
     assert.match(ui.t('help.1.body'), /^PiMotionCam /);
   }
-  assert.match(fs.readFileSync(path.join(__dirname, '../core/__init__.py'), 'utf8'), /__version__ = "2\.8\.1"/);
+  assert.match(fs.readFileSync(path.join(__dirname, '../core/__init__.py'), 'utf8'), /__version__ = "2\.8\.2"/);
 });

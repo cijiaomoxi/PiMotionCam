@@ -694,3 +694,12 @@ HELP = {
     "help.9.title": ('语言与文档', 'Language and documentation'),
     "help.9.body": ('顶栏可切换简体中文或 English，选择会自动保存。项目 README 提供中英双语概览，并链接完整的中文和英文使用文档。', 'Use the top bar to switch between Simplified Chinese and English; your choice is saved automatically. The project README provides a bilingual overview and links to the complete Chinese and English user guides.'),
 }
+
+# v2.8.2 live audio
+EXTRA.update({'audio.listen': ('监听声音', 'Listen live'), 'audio.stopListen': ('停止监听', 'Stop listening'), 'audio.allowLive': ('允许浏览器实时监听', 'Allow live audio in the browser'), 'audio.gain': ('麦克风增益（dB）', 'Microphone gain (dB)'), 'audio.volume': ('监听音量', 'Listening volume'), 'audio.live.stopped': ('监听已停止', 'Listening stopped'), 'audio.live.connecting': ('正在连接麦克风…', 'Connecting to the microphone…'), 'audio.live.playing': ('正在实时监听', 'Listening live'), 'audio.live.disabled': ('请在媒体页启用实时监听并保存', 'Enable live audio on the Media tab and save the settings'), 'audio.live.unavailable': ('麦克风不可用或连接中断', 'Microphone unavailable or connection interrupted'), 'audio.live.unsupported': ('此浏览器不支持实时音频，请使用较新的浏览器', 'Live audio is unsupported; use a recent browser'), 'audio.live.login': ('请先登录', 'Please sign in first')})
+
+try:
+    from .i18n_v282 import STRINGS as V282
+except ImportError:
+    from i18n_v282 import STRINGS as V282
+EXTRA.update(V282)

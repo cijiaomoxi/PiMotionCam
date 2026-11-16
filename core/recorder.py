@@ -19,6 +19,7 @@ from collections import deque
 from pathlib import Path
 
 from .audio import mux_audio
+from .media_tools import next_name
 from .util import dir_size, jpeg_crop, jpeg_thumbnail
 
 try:
@@ -92,6 +93,10 @@ class Recorder:
         self.audio = audio
         self._lock = threading.RLock()
         self._buffer: deque = deque()     # (ts, jpeg)
+        self._manual_until = 0.
+        self._external_until = 0.
+        self._external_source = "external"
+        self._last_still_at = 0.
         self._proc: subprocess.Popen | None = None
         self._event_id: str | None = None
         self._event_start = 0.0
@@ -134,7 +139,8 @@ class Recorder:
         # 音画才能严格对齐。
         self._event_fps = 10
         self._loop_fps = 10
-        self._mux_q: queue.Queue = queue.Queue()
+        self._mux_q: queue.Queue = queue.Queue(maxsize=2)
+        self._mux_pending = set()
         self._mux_thread: threading.Thread | None = None
         # 实测"真正送进编码器"的帧率。
         #
@@ -281,7 +287,18 @@ class Recorder:
                 self._rate_fps = (self._rate_frames - 1) / el
             self._rate_frames = 0
             self._rate_mark = now
-        if self.config.get("record", "paused", default=False):
+        manual = now < self._manual_until
+        if self._manual_until and not manual:
+            with self._lock:
+                self._manual_until = 0.
+                self.state.set("manual_recording", False)
+                if self._in_event:
+                    self._finish_event(now)
+        if now < self._external_until:
+            motion, algorithm = True, self._external_source
+        if manual:
+            motion, algorithm = True, "manual"
+        if self.config.get("record", "paused", default=False) and not manual:
             # 暂停录像时，若还有没收尾的事件要先正常收尾：否则 ffmpeg 收不到
             # EOF 也不会退出，会一直挂着，白占着硬件编码器和管道。
             if self._in_event or self._proc is not None:
@@ -295,6 +312,16 @@ class Recorder:
                         self._finish_loop_segment(now)
             return
         with self._lock:
+            if motion and not manual and self.config.get("record", "motion_stills", default=False):
+                interval = max(.2, float(self.config.get("record", "stills_interval", default=2)))
+                if now - self._last_still_at >= interval and self._storage_ready():
+                    path = self.config.media_sub("stills") / next_name(self.config, "motion", ".jpg")
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(frame)
+                    self._last_still_at = now
+                    if self.on_event:
+                        self.on_event("on_still_capture", {"id": path.stem, "thumb": path.name})
+                motion = False
             if not self._in_event:
                 self._buffer.append((now, frame))
                 pre = float(self.config.get("record", "pre_seconds", default=5))
@@ -304,7 +331,7 @@ class Recorder:
                     self._buffer.popleft()
 
             gap = float(self.config.get("record", "event_gap_seconds", default=0))
-            can_start = (now - self._last_event_end) >= gap
+            can_start = manual or (now - self._last_event_end) >= gap
 
             if not self._in_event:
                 if motion and can_start:
@@ -333,8 +360,29 @@ class Recorder:
                     self._finish_event(now)
                     return
             max_event = float(self.config.get("record", "max_event_seconds", default=120))
-            if (now - self._event_start) >= max_event:
+            if not manual and (now - self._event_start) >= max_event:
                 self._finish_event(now)
+
+    def manual(self, start=True, seconds=120):
+        with self._lock:
+            if start:
+                if not self._storage_ready():
+                    raise OSError("Recording storage is unavailable")
+                if self._in_event:
+                    self._finish_event(time.time())
+                self._manual_until = time.time() + max(1., min(3600., float(seconds)))
+            else:
+                self._manual_until = 0.
+                if self._in_event and self._event_algorithm == "manual":
+                    self._finish_event(time.time())
+            self.state.set("manual_recording", bool(start))
+        return {"ok": True, "manual": bool(start), "until": self._manual_until}
+
+    def trigger(self, seconds=2, source="external"):
+        with self._lock:
+            self._external_until = time.time() + max(.1, min(300., float(seconds)))
+            self._external_source = str(source)[:32]
+        return {"ok": True, "until": self._external_until}
 
     # ------------------------------------------------------------------
     def _spawn_encoder(self, cmd: list[str]):
@@ -394,7 +442,7 @@ class Recorder:
         # 循环录像让位：事件期间 loop 处于暂停状态
         self._loop_yielded = bool(self.config.get("loop", "enabled", default=False))
         self.state.update(loop_yielded=self._loop_yielded)
-        self._event_id = time.strftime("%Y%m%d_%H%M%S")
+        self._event_id = next_name(self.config, "manual" if algorithm == "manual" else "motion", "")
         self._event_start = now
         self._event_frames = 0
         self._last_motion_at = now
@@ -668,7 +716,7 @@ class Recorder:
         if self.audio is None:
             return False
         try:
-            return bool(self.audio.running)
+            return bool(self.config.get("record", "audio_enabled", default=False) and self.audio.running)
         except Exception:
             return False
 
@@ -678,7 +726,17 @@ class Recorder:
             return
         if not path.exists() or not t1 or t1 <= t0:
             return
-        self._mux_q.put((str(path), float(t0), float(t1)))
+        # Snapshot before capture restarts or a slow mux drains the ring buffer.
+        wav = self.audio.slice_wav(t0, t1)
+        if not wav:
+            return
+        try:
+            self._mux_pending.add(str(path))
+            self._mux_q.put_nowait((str(path), float(t0), float(t1), wav))
+        except queue.Full:
+            self._mux_pending.discard(str(path))
+            self._log("音轨合流队列已满，本段保留无声录像")
+            return
         self._ensure_mux_worker()
 
     def _ensure_mux_worker(self) -> None:
@@ -698,14 +756,19 @@ class Recorder:
                     return              # 音频关了，线程退出
                 continue
             if job is None:
+                self._mux_q.task_done()
                 return
             try:
                 self._mux_one(*job)
             except Exception as exc:  # noqa: BLE001
                 self._log("音轨合流失败: %s" % exc)
+            finally:
+                with self._lock:
+                    self._mux_pending.discard(job[0])
+                self._mux_q.task_done()
 
-    def _mux_one(self, path: str, t0: float, t1: float) -> None:
-        wav = self.audio.slice_wav(t0, t1)
+    def _mux_one(self, path: str, t0: float, t1: float, wav=None) -> None:
+        wav = wav if wav is not None else self.audio.slice_wav(t0, t1)
         if not wav:
             return
         try:
@@ -715,8 +778,19 @@ class Recorder:
         p = Path(path)
         if mux_audio(p, wav, bitrate, self._tmp, log=self.log):
             self._log("已合入音轨：%s" % p.name)
+            with self._lock:
+                for entry in self._events:
+                    if entry.get("video") == p.name and p.exists():
+                        entry.update(size=p.stat().st_size, audio=True)
+                        self._save_events()
+                        break
         else:
             self._log("音轨合流失败（保留无声录像）：%s" % p.name)
+
+    def finish_audio(self, timeout=8):
+        deadline = time.monotonic()+timeout
+        while self._mux_q.unfinished_tasks and time.monotonic()<deadline:
+            time.sleep(.05)
 
     # ------------------------------------------------------------------
     # 循环录像（loop）
@@ -778,7 +852,7 @@ class Recorder:
             return
 
         self._loop_index += 1
-        name = "loop_%s_%04d.mp4" % (time.strftime("%Y%m%d_%H%M%S"), self._loop_index)
+        name = next_name(self.config, "loop", ".mp4")
         out = d / name
         try:
             quality = int(self.config.get("loop", "quality", default=26) or 26)
@@ -878,6 +952,9 @@ class Recorder:
         seg_fps = max(1, self._loop_fps)
         seg_end = self._loop_audio_start + (seg_frames / seg_fps)
         self._queue_mux(path, self._loop_audio_start, seg_end)
+        if self.on_event:
+            self.on_event("on_loop_end", {"id": path.stem, "video": path.name,
+                                          "duration": seg_frames/seg_fps, "ok": True})
         self._loop_check_disk()
 
     def _oldest_loop_files(self) -> list[Path]:
@@ -1050,6 +1127,8 @@ class Recorder:
                 elapsed = max(0.0, now - start)
                 deadline = min(self._last_motion_at + post,
                                self._event_start + max_event)
+                if self._manual_until:
+                    deadline = self._manual_until
                 remaining = max(0.0, deadline - now)
             loop_recording = bool(self._loop_active)
             loop_remaining = None
@@ -1061,6 +1140,7 @@ class Recorder:
             "elapsed": round(elapsed, 1),
             "remaining": round(remaining, 1) if remaining is not None else None,
             "paused": bool(self.config.get("record", "paused", default=False)),
+            "manual": bool(self._manual_until > now),
             "loop_recording": loop_recording,
             "loop_remaining": (round(loop_remaining, 1)
                                if loop_remaining is not None else None),
@@ -1325,6 +1405,9 @@ class Recorder:
 
     def stop(self):
         with self._lock:
+            self._manual_until = self._external_until = 0.
+            self._buffer.clear()
+            self.state.set("manual_recording", False)
             if self._in_event or self._proc is not None:
                 self._finish_event(time.time())
             if self._loop_active or self._loop_proc is not None:

@@ -250,6 +250,7 @@ class FakeConfig:
 
     def __init__(self, root, values=None):
         self.root = Path(root)
+        self.path = self.root / "config.json"
         self.internal = self.root / "internal"
         self.configured = self.root / "internal"
         self.values = values or {}
@@ -680,7 +681,8 @@ def test_audio_windows() -> None:
     rec.audio = None
     check("没有音频对象时不算开段", rec._audio_enabled() is False)
     rec.audio = audio
-    check("音频在跑时算开段", rec._audio_enabled() is True)
+    rec.config.values.setdefault("record", {})["audio_enabled"] = True
+    check("音频在跑且录像声音启用时算开段", rec._audio_enabled() is True)
 
     # 合流用替身：记录它被怎么调用
     calls = []

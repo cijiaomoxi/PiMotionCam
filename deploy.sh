@@ -73,6 +73,7 @@ COPYFILE_DISABLE=1 tar czf "$TARBALL" \
   --exclude='./logs' \
   --exclude='./versions' \
   --exclude='./dist' \
+  --exclude='./.media-sequence' \
   --exclude='.DS_Store' \
   --exclude='*.so' \
   --exclude='*.o' \

@@ -50,6 +50,20 @@ _READ_CHUNK = 4096            # 每次从 arecord 读的字节数（16k 单声�
 _RETRY_DELAY = 3.0            # 麦克风掉线后的重试间隔
 
 
+def apply_gain(data: bytes, gain_db: float = 0.0) -> bytes:
+    """S16_LE gain with saturation; preserve channel ordering and frame size."""
+    count = len(data) // 2
+    if not count or not gain_db:
+        return data
+    factor = 10.0 ** (max(-30.0, min(30.0, float(gain_db))) / 20.0)
+    if np is not None:
+        samples = np.frombuffer(data, dtype="<i2", count=count).astype(np.float64)
+        return np.clip(np.rint(samples * factor), -32768, 32767).astype("<i2").tobytes() + data[count*2:]
+    values = [max(-32768, min(32767, round(value * factor)))
+              for (value,) in struct.iter_unpack("<h", data[:count * 2])]
+    return struct.pack('<%dh' % count, *values) + data[count*2:]
+
+
 # ----------------------------------------------------------------------
 # 设备探测
 # ----------------------------------------------------------------------
@@ -258,16 +272,24 @@ class AudioCapture:
     _rate: int = field(default=DEFAULT_RATE, init=False)
     _channels: int = field(default=DEFAULT_CHANNELS, init=False)
     _buffer_seconds: int = field(default=DEFAULT_BUFFER_SECONDS, init=False)
+    _gain_db: float = field(default=0.0, init=False)
+    _live: deque = field(default_factory=lambda: deque(maxlen=8), init=False)
+    _live_sequence: int = field(default=0, init=False)
+    _live_epoch: int = field(default=0, init=False)
+
+    def __post_init__(self):
+        self._live_condition = threading.Condition(self._lock)
 
     # ------------------------------------------------------------------
     def start(self, device: str = "auto", rate: int = DEFAULT_RATE,
               channels: int = DEFAULT_CHANNELS,
               buffer_seconds: int = DEFAULT_BUFFER_SECONDS,
-              prefer_port: str = "") -> dict:
+              prefer_port: str = "", gain_db: float = 0.0) -> dict:
         """开始采集。返回状态字典。"""
         self.stop()
         self._rate = max(4000, min(48000, int(rate or DEFAULT_RATE)))
         self._channels = 1 if int(channels or 1) <= 1 else 2
+        self._gain_db = max(-30.0, min(30.0, float(gain_db or 0.0)))
         self._buffer_seconds = max(10, min(600, int(buffer_seconds or
                                                      DEFAULT_BUFFER_SECONDS)))
 
@@ -327,9 +349,13 @@ class AudioCapture:
         if th is not None and th.is_alive():
             th.join(timeout=3)
         self._status = "idle"
+        self._error = ""
         self._level = 0.0
         with self._lock:
             self._chunks.clear()
+            self._live.clear()
+            self._live_epoch += 1
+            self._live_condition.notify_all()
         self._publish()
         return self.status()
 
@@ -352,6 +378,7 @@ class AudioCapture:
             "level": round(self._level, 3),
             "error": self._error,
             "running": self.running,
+            "gain_db": self._gain_db,
         }
 
     def _publish(self) -> None:
@@ -386,7 +413,7 @@ class AudioCapture:
                 self._status = "error"
                 self._error = "无法启动麦克风采集：%s" % exc
                 self._publish()
-                time.sleep(_RETRY_DELAY)
+                self._stop.wait(_RETRY_DELAY)
                 continue
             self._proc = proc
             self._status = "running"
@@ -395,14 +422,21 @@ class AudioCapture:
             self._log("麦克风已开始采集：%s（%d Hz / %d 声道）"
                       % (dev.plug_id, self._rate, self._channels))
             try:
+                pending = b""
                 while not self._stop.is_set():
-                    data = proc.stdout.read(_READ_CHUNK)
+                    chunk = proc.stdout.read(_READ_CHUNK)
                     t1 = time.time()
-                    if not data:
+                    if not chunk:
                         break
+                    pending += chunk
+                    frame_bytes = self._channels*SAMPLE_WIDTH
+                    count = len(pending)-len(pending)%frame_bytes
+                    data, pending = pending[:count], pending[count:]
+                    if not data:
+                        continue
                     # 这一块样本覆盖的是"读到它之前的那段时间"：
                     # arecord 按采样率匀速出样本，所以块起点 = 读完时刻 - 块时长。
-                    dur = len(data) / float(self._rate * self._channels)
+                    dur = len(data) / float(self._rate * self._channels * SAMPLE_WIDTH)
                     self._push(data, t1 - dur)
             except Exception:
                 pass
@@ -424,17 +458,50 @@ class AudioCapture:
                 self._error = "麦克风采集中断，正在重试"
                 self._publish()
                 self._log("麦克风采集中断，%g 秒后重试" % _RETRY_DELAY)
-                time.sleep(_RETRY_DELAY)
+                self._stop.wait(_RETRY_DELAY)
 
     def _push(self, data: bytes, ts: float) -> None:
         """把一块 PCM 存进环形缓冲，并更新电平。"""
+        data = apply_gain(data, self._gain_db)
         with self._lock:
             self._chunks.append((ts, data))
             cutoff = ts - self._buffer_seconds
             while self._chunks and self._chunks[0][0] < cutoff:
                 self._chunks.popleft()
+            self._live_sequence += 1
+            self._live.append((self._live_sequence, data))
+            self._live_condition.notify_all()
         self._level = self._rms_level(data)
+        callback = getattr(self, "on_level", None)
+        if callback:
+            try:
+                callback(self._level)
+            except Exception:
+                pass
         self._publish()
+
+    def live_pcm(self, idle_timeout=10.0):
+        """Fan out current PCM without reopening ALSA or replaying old audio.
+
+        At most eight recent chunks are retained. A slow browser skips old
+        chunks instead of applying backpressure to recording or capture.
+        """
+        with self._lock:
+            cursor, epoch = self._live_sequence, self._live_epoch
+        received_at = time.monotonic()
+        while True:
+            with self._live_condition:
+                self._live_condition.wait_for(
+                    lambda: self._live_sequence > cursor or self._stop.is_set()
+                    or self._live_epoch != epoch, timeout=2.0)
+                if self._stop.is_set() or self._live_epoch != epoch:
+                    return
+                pending = [(seq, pcm) for seq, pcm in self._live if seq > cursor]
+                if not pending and time.monotonic() - received_at >= idle_timeout:
+                    return
+            for cursor, pcm in pending:
+                received_at = time.monotonic()
+                yield pcm
 
     def _rms_level(self, data: bytes) -> float:
         """RMS 电平映射到 0..1（-60 dB ~ 0 dB）。"""
@@ -470,13 +537,13 @@ class AudioCapture:
             chunks = list(self._chunks)
         bpf = SAMPLE_WIDTH * self._channels
         rate = self._rate
-        total = int((t1 - t0) * rate)
+        total = int(round((t1 - t0) * rate))
         if total <= 0:
             return None
         buf = bytearray(total * bpf)        # 缺的部分保持静音
         copied = 0
         for ts, data in chunks:
-            dur = len(data) / float(rate * self._channels)
+            dur = len(data) / float(rate * self._channels * SAMPLE_WIDTH)
             if ts + dur <= t0 or ts >= t1:
                 continue
             start = max(0, int(round((t0 - ts) * rate)))

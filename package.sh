@@ -95,6 +95,16 @@ except Exception:
 web = data.get("web")
 if isinstance(web, dict):
     web.pop("password_hash", None)
+network = data.get("network")
+if isinstance(network, dict):
+    network["secret"] = ""
+    network["allow_hosts"] = ["127.0.0.1"]
+    network["tcp_enabled"] = network["multicast_enabled"] = False
+media = data.get("media")
+if isinstance(media, dict):
+    media["dir"] = media["archive_target"] = ""
+if "location" in data:
+    data["location"] = {"latitude": None, "longitude": None, "timezone": ""}
 json.dump(data, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 open(p, "a", encoding="utf-8").write("\n")
 PY
@@ -122,16 +132,22 @@ REQUIRED=(
   "core/native.py" "core/presets.py" "core/recorder.py" "core/scheduler.py"
   "core/servo.py" "core/state.py" "core/storage.py" "core/timelapse.py"
   "core/util.py" "core/web.py" "core/media_stats.py"
+  "core/audio_recording.py" "core/control.py" "core/detection_journal.py"
+  "core/extended_web.py" "core/media_tools.py" "core/motion_analysis.py"
+  "core/solar.py" "core/video_processing.py"
   "core/_pkc_native.c"
   "core/locales/zh-CN.json" "core/locales/en-US.json"
   "templates/index.html" "templates/login.html"
   "static/app.js" "static/i18n.js" "static/polling.js" "static/style.css"
+  "static/advanced.js" "static/live_audio.js"
   "docs/使用文档.md" "docs/USAGE.en.md" "docs/上游功能对照.md" "docs/PERFORMANCE.md"
   "README.md" "README.zh-CN.md" "README.en.md" "CHANGELOG.md" "LICENSE" "requirements-test.txt"
   "install.sh" "build_native.sh" "krellcam.py" "pimotioncam.py" "deploy.sh" "package.sh"
   "tools/test_v270.py" "tools/test_web_v270.py" "tools/test_audio.py"
   "tools/test_optimizations.py" "tools/test_polling.cjs" "tools/benchmark.py"
   "tools/test_native_sanitizer.c" "tools/test_i18n.cjs"
+  "tools/test_v282.py" "tools/test_live_audio.cjs" "tools/control_client.py"
+  "tools/i18n_v282.py" "docs/V2.8.2.md" "docs/V2.8.2-VALIDATION.md"
 )
 MISSING=0
 for rel in "${REQUIRED[@]}"; do

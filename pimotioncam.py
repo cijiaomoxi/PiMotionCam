@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PiMotionCam —— 基于 libcamera/picamera2 的移动侦测录像服务。
 
-对标官方 PiKrellCam 的全部网页功能：
+参考官方 PiKrellCam 的主要功能设计：
   * 实时预览 + 浏览器端 OSD 叠加
   * 多运动区域图形化编辑、双算法并行灵敏度
   * 预录/补录、事件录像与缩略图（整帧 + 运动目标裁剪）
@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import os
+import argparse
+import stat
 import signal
 import sys
 import time
@@ -48,8 +50,50 @@ def _apply_model_defaults(service: AppService) -> None:
 
 
 def main() -> int:
-    service = AppService()
+    from core import __version__
+    from core.config import CONFIG_FILE, PKC_DIR, Config
+    parser = argparse.ArgumentParser(description="PiMotionCam — motion detection recording / 移动侦测录像")
+    parser.add_argument('--version',action='version',version='PiMotionCam '+__version__)
+    parser.add_argument('--config',type=Path,default=CONFIG_FILE)
+    parser.add_argument('--host')
+    parser.add_argument('--port',type=int)
+    parser.add_argument('--device')
+    parser.add_argument('--width',type=int)
+    parser.add_argument('--height',type=int)
+    parser.add_argument('--fps',type=int)
+    parser.add_argument('--command',help='Send one internal command to the running local service')
+    parser.add_argument('--check-config',action='store_true',help='Validate settings without opening a camera')
+    args=parser.parse_args()
+    if args.command:
+        fifo=PKC_DIR/'commands.fifo'
+        try:
+            if '\n' in args.command or len(args.command.encode())>4000 or not stat.S_ISFIFO(fifo.stat().st_mode):
+                raise ValueError('Invalid command or command FIFO')
+            fd=os.open(fifo,os.O_WRONLY|os.O_NONBLOCK)
+            try:os.write(fd,(args.command+'\n').encode())
+            finally:os.close(fd)
+        except (OSError,ValueError) as exc:
+            print(str(exc),file=sys.stderr);return 1
+        return 0
+    if args.check_config:
+        from core.extended_web import validate_patch
+        try:
+            config=Config(args.config);validate_patch(config.snapshot(),config)
+        except (ValueError,TypeError,KeyError) as exc:
+            print(str(exc),file=sys.stderr);return 1
+        print('Configuration valid / 配置有效');return 0
+    service = AppService(args.config)
     _apply_model_defaults(service)
+    patch={}
+    if args.device is not None:patch['device']=args.device
+    if args.fps is not None:patch['fps']=max(1,min(120,args.fps))
+    if args.width or args.height:
+        w,h=service.config.get('camera','resolution')
+        patch['resolution']=[args.width or w,args.height or h]
+    web={}
+    if args.host is not None:web['host']=args.host
+    if args.port is not None:web['port']=args.port
+    service.config.override({'camera':patch,'web':web})
     service.start()
 
     app = create_app(service)
