@@ -33,6 +33,8 @@ DEFAULT_CONFIG = {
         "rotation": 0,
         "flip": "none",          # none | horizontal | vertical | both
         "jpeg_quality": 72,      # 预览/录像帧的 JPEG 质量
+        "stills_resolution": None,
+        "processing": {"crop": [0, 0, 1, 1], "effect": "none", "stabilize": False},
         # 侦测用的降采样尺寸（直接从 RGB 数组步长采样得到）
         "detect_resolution": [320, 180],
         "detect_fps": 10,
@@ -97,6 +99,11 @@ DEFAULT_CONFIG = {
             {"name": "全画面", "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0, "enabled": True},
         ],
         "region_presets": {},
+        "analysis": {"enabled": False, "vectors": True, "direction": "any",
+                     "threshold": 15, "burst_ratio": 0, "burst_frames": 3,
+                     "confirm_gap_frames": 0},
+        "output": {"csv": False, "events": False, "fifo": False},
+        "settle_seconds": 1.0,
     },
     "record": {
         "pre_seconds": 5,
@@ -119,6 +126,14 @@ DEFAULT_CONFIG = {
         "audio_channels": 1,         # 声道数
         "audio_bitrate": 64,         # AAC 码率（kbps）
         "audio_buffer_seconds": 180,  # 环形缓冲保留时长（秒）
+        "audio_stream_enabled": False,  # 显式启用后可在浏览器点击实时监听
+        "audio_gain_db": 0.0,
+        "audio_trigger_enabled": False,
+        "audio_trigger_level": 0.2,
+        "audio_trigger_seconds": 0.3,
+        "motion_stills": False,
+        "stills_interval": 2,
+        "name_template": "{kind}_{date}_{time}_{seq:06d}",
     },
     "timelapse": {
         "enabled": False,
@@ -143,6 +158,11 @@ DEFAULT_CONFIG = {
         "show_vectors": False,
         # 界面语言：auto（按浏览器 Accept-Language 自动选）/ zh-CN / en-US
         "language": "auto",
+        "theme": "dark",
+        "custom_links": [],
+        "log_lines": 300,
+        "burn_in": {"enabled": False, "timestamp": True, "text": "", "font_size": 18,
+                    "background": True, "frame_info": False, "vu_meter": False},
     },
     "media": {
         "dir": "",             # 空 = 使用应用目录下 media/；可改为 /mnt/usb 等
@@ -151,6 +171,8 @@ DEFAULT_CONFIG = {
         "require_mount": True,
         # 外部存储不可用时是否回退到内置存储；False = 暂停录像并告警
         "fallback_internal": False,
+        "archive_require_mount": False,
+        "archive_min_free_percent": 5,
     },
     "servo": {
         "enabled": False,
@@ -162,6 +184,12 @@ DEFAULT_CONFIG = {
         "tilt_min": 0,
         "tilt_max": 180,
         "smooth_ms": 0,        # 平滑移动时间
+        "pan_invert": False,
+        "tilt_invert": False,
+        "gpiochip": 0,
+        "step_degrees": 2,
+        "multi_steps": 5,
+        "scan_seconds": 10,
         "positions": [
             {"name": "中", "pan": 90, "tilt": 90},
             {"name": "左", "pan": 30, "tilt": 90},
@@ -173,8 +201,19 @@ DEFAULT_CONFIG = {
         "on_motion_end": "",
         "on_motion_preview_save": "",
         "on_timelapse_end": "",
+        "on_startup": "",
+        "on_motion_enable": "",
+        "on_loop_end": "",
+        "on_manual_end": "",
+        "on_still_capture": "",
+        "on_multicast_pkc_message": "",
     },
     "schedules": [],
+    "location": {"latitude": None, "longitude": None, "timezone": ""},
+    "network": {"tcp_enabled": False, "tcp_host": "127.0.0.1", "tcp_port": 3000,
+                "multicast_enabled": False, "multicast_group": "225.0.0.55",
+                "multicast_port": 22555, "interface": "0.0.0.0",
+                "allow_hosts": ["127.0.0.1"], "secret": ""},
     "presets": {},
 }
 
@@ -281,6 +320,12 @@ class Config:
         replace=True 时，patch 里的一级键整体替换而不深合并。
         """
         return self.save(patch, replace=replace)
+
+    def override(self, patch):
+        """Apply command-line overrides without writing the configuration file."""
+        with self._lock:
+            self._data = _deep_merge(self._data, patch)
+            self._version += 1
 
     def replace_value(self, section: str, key: str, value) -> dict:
         """整段替换某个配置节里的某一个键（不做深合并）。

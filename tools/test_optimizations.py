@@ -190,6 +190,7 @@ class AudioAndQueueTests(unittest.TestCase):
             rec.config = types.SimpleNamespace(get=lambda *keys, default=None: (
                 True if keys == ("record", "paused") else fps))
             rec._rate_frames, rec._rate_mark, rec._rate_fps = 0, 0., 0.
+            rec._manual_until = rec._external_until = 0.
             rec._in_event = rec._loop_active = False
             rec._proc = rec._loop_proc = None
             for i in range(fps * 7):

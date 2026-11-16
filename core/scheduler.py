@@ -12,7 +12,10 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime
+import select
+import stat
+from datetime import datetime, timedelta
+from .solar import scheduled_time
 from pathlib import Path
 
 from .config import PKC_DIR
@@ -91,21 +94,19 @@ class Scheduler:
                 if len(parts) < 3:
                     continue
                 days, when, command = parts[0], parts[1], parts[2].strip().strip('"')
-                entry = {"days": days, "time": when, "command": command, "source": str(path)}
+                entry = {"days": days, "time": when, "command": command, "source": str(path), "_trusted_local": True}
                 if ":" not in when:
                     # 官方还支持 start / hour / minute / 5minute 这类时间写法，
                     # 这里折算成"固定分钟间隔"。
                     spec = when.strip().lower()
                     if spec == "start":
-                        entry["interval_minutes"] = 1440       # 每天一次
+                        entry["at_start"] = True
                     elif spec == "hour":
                         entry["interval_minutes"] = 60
                     elif spec == "minute":
                         entry["interval_minutes"] = 1
                     elif spec.endswith("minute") and spec[:-6].isdigit():
                         entry["interval_minutes"] = max(1, int(spec[:-6]))
-                    else:
-                        entry["interval_minutes"] = 1
                 out.append(entry)
         except Exception:
             pass
@@ -113,7 +114,7 @@ class Scheduler:
 
     def entries(self) -> list[dict]:
         with self._lock:
-            items = list(self._entries)
+            items = [{k: v for k, v in e.items() if not k.startswith('_')} for e in self._entries]
         # 统一带上 index 与 uid，方便前端按位置删除/更新
         for i, e in enumerate(items):
             e.setdefault("index", i)
@@ -131,29 +132,38 @@ class Scheduler:
 
     def stop(self):
         self._stop.set()
+        for thread in (self._thread, self._fifo_thread):
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=1)
 
     def _start_fifo(self):
         try:
-            PKC_DIR.mkdir(parents=True, exist_ok=True)
+            self.fifo_path.parent.mkdir(parents=True, exist_ok=True)
             if not self.fifo_path.exists():
-                os.mkfifo(self.fifo_path, 0o660)
+                os.mkfifo(self.fifo_path, 0o600)
+            if self.fifo_path.is_symlink() or not stat.S_ISFIFO(self.fifo_path.stat().st_mode):
+                raise OSError("Command path is not a FIFO")
             self._fifo_thread = threading.Thread(target=self._fifo_loop, name="fifo", daemon=True)
             self._fifo_thread.start()
         except Exception as exc:
             self.log(f"fifo setup failed: {exc}")
 
     def _fifo_loop(self):
-        while not self._stop.is_set():
-            try:
-                with open(self.fifo_path, "r") as fh:
-                    for line in fh:
-                        if self._stop.is_set():
-                            break
-                        cmd = line.strip()
-                        if cmd:
-                            self.execute(cmd)
-            except Exception:
-                time.sleep(2)
+        fd = os.open(self.fifo_path, os.O_RDWR | os.O_NONBLOCK)
+        pending = b""
+        try:
+            while not self._stop.is_set():
+                if not select.select([fd], [], [], .2)[0]:
+                    continue
+                pending += os.read(fd, 4096)
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    if len(line) <= 4096:
+                        self.execute(line.decode("utf-8", "replace"))
+                if len(pending) > 4096:
+                    pending = b""
+        finally:
+            os.close(fd)
 
     # ------------------------------------------------------------------
     def execute(self, command: str, allow_shell: bool = False) -> str:
@@ -188,16 +198,23 @@ class Scheduler:
 
     # ------------------------------------------------------------------
     def _loop(self):
-        while not self._stop.wait(10):
+        while not self._stop.is_set():
             try:
                 self.config.reload_if_changed()
                 self.reload()
                 self._tick()
             except Exception:
                 pass
+            self._stop.wait(10)
 
-    def _tick(self):
-        now = datetime.now()
+    def _tick(self, now=None):
+        now = now or datetime.now().astimezone()
+        if now.tzinfo is None:
+            now = now.astimezone()
+        location = self.config.get("location", default={}) or {}
+        if location.get("timezone"):
+            from zoneinfo import ZoneInfo
+            now = now.astimezone(ZoneInfo(location['timezone']))
         today = now.strftime("%Y-%m-%d")
         now_min = now.hour * 60 + now.minute
         with self._lock:
@@ -208,7 +225,14 @@ class Scheduler:
             key = f"{idx}:{e.get('command')}"
             # 只有 ~/.pikrellcam/at-commands.conf 里的条目允许任意 shell；
             # 网页上可写的命令表不允许（那等于把远程执行暴露给局域网）。
-            allow_shell = bool(e.get("source"))
+            allow_shell = e.get("_trusted_local") is True
+            if e.get("at_start"):
+                if key not in self._last_runs:
+                    self._last_runs[key] = today
+                    self.execute(e["command"], allow_shell=allow_shell)
+                continue
+            if now.weekday() not in _parse_days(e.get("days", "*")):
+                continue
             if "interval_minutes" in e:
                 interval = max(1, int(e.get("interval_minutes", 1)))
                 last = self._last_runs.get(key)
@@ -216,28 +240,27 @@ class Scheduler:
                 if last:
                     try:
                         lt = datetime.strptime(last, "%Y-%m-%d %H:%M")
-                        last_min = lt.hour * 60 + lt.minute
+                        last_min = (now.replace(tzinfo=None)-lt).total_seconds()/60
                     except Exception:
                         last_min = None
-                if last_min is None or (now_min - last_min) >= interval:
+                if last_min is None or last_min >= interval:
                     self._last_runs[key] = now.strftime("%Y-%m-%d %H:%M")
                     self.execute(e["command"], allow_shell=allow_shell)
                 continue
-            when = str(e.get("time", ""))
-            if ":" not in when:
-                continue
-            try:
-                hh, mm = [int(x) for x in when.split(":")[:2]]
-            except Exception:
-                continue
-            if now.hour != hh or now.minute != mm:
-                continue
-            if now.weekday() not in _parse_days(e.get("days", "*")):
-                continue
-            if self._last_runs.get(key) == today:
-                continue
-            self._last_runs[key] = today
-            self.execute(e["command"], allow_shell=allow_shell)
+            # Check adjacent solar dates too: a signed offset can cross midnight.
+            for delta in (-1, 0, 1):
+                day = (now+timedelta(days=delta)).date()
+                try:
+                    target = scheduled_time(e.get("time", ""), day, location, e.get("offset_minutes", 0))
+                except (ValueError, TypeError, KeyError):
+                    target = None
+                if target is None or target.strftime("%Y-%m-%d %H:%M") != now.strftime("%Y-%m-%d %H:%M"):
+                    continue
+                marker = target.strftime("%Y-%m-%d %H:%M")
+                if self._last_runs.get(key) != marker:
+                    self._last_runs[key] = marker
+                    self.execute(e["command"], allow_shell=allow_shell)
+                break
 
     # ------------------------------------------------------------------
     def save_entry(self, entry: dict) -> list[dict]:
@@ -245,7 +268,7 @@ class Scheduler:
         entries = [e for e in entries if isinstance(e, dict)]
         uid = entry.get("uid")
         idx = entry.get("index")
-        clean = {k: v for k, v in entry.items() if k not in ("index",)}
+        clean = {k: v for k, v in entry.items() if k in ("uid", "days", "time", "interval_minutes", "command", "enabled", "offset_minutes")}
         if not clean.get("uid"):
             clean["uid"] = uid or uuid.uuid4().hex[:8]
         target = None

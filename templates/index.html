@@ -100,6 +100,8 @@
         <button id="btn-recpause" data-i18n="btn.pauseRecord">暂停录像</button>
         <button id="btn-still" data-i18n="btn.snapshot">抓拍一张</button>
         <button id="btn-restart" data-i18n="btn.restartService">重启服务</button>
+        <button id="btn-preview-listen" data-i18n="audio.listen">监听声音</button>
+        <button id="btn-preview-listen-stop" data-i18n="audio.stopListen">停止监听</button>
         <span class="hint" id="preview-hint"></span>
       </div>
     </div>
@@ -321,6 +323,12 @@
     <div class="cols">
       <label class="check"><input type="checkbox" id="audio-enabled">
         <span data-i18n="label.audioEnabled">给录像加声音</span></label>
+      <label class="check"><input type="checkbox" id="audio-stream-enabled">
+        <span data-i18n="audio.allowLive">允许浏览器实时监听</span></label>
+      <label class="field"><span data-i18n="audio.gain">麦克风增益（dB）</span>
+        <input id="audio-gain" type="number" min="-30" max="30" step="1" value="0"></label>
+      <label class="field"><span data-i18n="audio.volume">监听音量</span>
+        <input id="live-audio-volume" type="range" min="0" max="100" value="80"></label>
       <label class="field"><span><span data-i18n="label.audioDevice">麦克风</span></span>
         <select id="audio-device"></select></label>
       <label class="field"><span><span data-i18n="label.audioRate">采样率</span></span>
@@ -342,6 +350,9 @@
     </div>
     <div class="row" style="margin-top:10px">
       <button id="btn-audio-save" class="primary" data-i18n="btn.saveAudio">保存音频设置</button>
+      <button id="btn-live-listen" data-i18n="audio.listen">监听声音</button>
+      <button id="btn-live-stop" data-i18n="audio.stopListen">停止监听</button>
+      <span class="hint" id="live-audio-status" role="status"></span>
     </div>
     <p class="hint" data-i18n="hint.audioBackend"></p>
   </div>
@@ -565,6 +576,8 @@
 <script>window.PKC_I18N = {{ i18n | tojson }};</script>
 <script src="{{ url_for('static', filename='i18n.js') }}"></script>
 <script src="{{ url_for('static', filename='polling.js') }}"></script>
+<script src="{{ url_for('static', filename='live_audio.js') }}"></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='advanced.js') }}"></script>
 </body>
 </html>

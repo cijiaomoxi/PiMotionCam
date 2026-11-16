@@ -3,10 +3,10 @@
 同时支持两类摄像头，走两条不同的采集通路：
 
 1. **树莓派 CSI 摄像头** —— 走 libcamera / picamera2（`Picamera2Backend`）
-   * Debian / Raspberry Pi OS 的 libcamera 只带 RPi 专用管线处理器，
-     **不含 u8vidcam 处理器**，所以 USB 摄像头 libcamera 根本发现不了。
+   * CSI 优先使用系统的 Raspberry Pi 相机管线。
 
-2. **USB (UVC) 摄像头** —— 走 ffmpeg + V4L2（`V4L2Backend`）
+2. **USB (UVC) 摄像头** —— 优先 ffmpeg + V4L2（`V4L2Backend`）；
+   新 libcamera 枚举的同一 USB 入口按端口映射到 V4L2。
    * 用 ffmpeg 直接抓 /dev/videoN，输出 MJPEG 字节流。
    * 摄像头原生支持 MJPEG 时用 `-c:v copy` 零转码直通，CPU 开销几乎为零；
      只支持 YUYV 时由 ffmpeg 软件转码成 MJPEG。
@@ -33,6 +33,7 @@ from __future__ import annotations
 import io
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -44,6 +45,8 @@ from PIL import Image
 
 from . import imaging
 from . import native
+from .detection_journal import DetectionJournal
+from .video_processing import VideoProcessor
 
 try:
     from picamera2 import Picamera2
@@ -91,6 +94,12 @@ def _v4l2_devices() -> list[dict]:
                     continue
                 if any(h in name.lower() for h in _PLATFORM_HINTS):
                     continue
+                # UVC exposes a second metadata node on modern kernels. It
+                # cannot supply video and must not appear as a camera choice.
+                capture = subprocess.run(["v4l2-ctl", "-d", dev, "--get-fmt-video"],
+                                         capture_output=True, timeout=2)
+                if capture.returncode:
+                    continue
                 out.append({"id": dev, "model": name or dev})
     except Exception:
         pass
@@ -103,7 +112,7 @@ def _libcamera_cameras() -> list[dict]:
         from picamera2 import Picamera2 as _P2
         for info in _P2.global_camera_info():
             cid = str(info.get("Id", ""))
-            is_rpi = cid.startswith("/base/soc")
+            is_rpi = cid.startswith("/base/") and "usb" not in cid.lower()
             out.append({
                 "index": int(info.get("Num", len(out))),
                 "id": cid,
@@ -139,18 +148,42 @@ def list_cameras() -> list[dict]:
 class V4L2Backend:
     """用 ffmpeg 从 V4L2 设备读取 JPEG 帧。"""
 
-    def __init__(self, device: str, width: int, height: int, fps: int):
+    def __init__(self, device: str, width: int, height: int, fps: int,
+                 rotation: int = 0, flip: str = "none", quality: int = 72):
         self.device = device
         self.width = int(width)
         self.height = int(height)
         self.fps = max(1, int(fps))
+        self.rotation, self.flip = rotation, flip
+        self.quality = max(1, min(100, int(quality)))
+        self.output_size = (self.height, self.width) if rotation in (90, 270) else (self.width, self.height)
         self.proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        self._q: queue.Queue = queue.Queue(maxsize=30)
+        self._q: queue.Queue = queue.Queue(maxsize=3)
         self.input_format = "mjpeg"
         self.passthrough = True
         self.error = None
+        self._stderr = collections.deque(maxlen=8)
+        self._error_thread = None
+
+    def filters(self) -> list[str]:
+        # Match np.rot90 used by the raw CSI path: positive angles are CCW.
+        filters = {0: [], 90: ["transpose=cclock"],
+                   180: ["hflip", "vflip"], 270: ["transpose=clock"]}.get(self.rotation, [])[:]
+        if self.flip in ("horizontal", "both"):
+            filters.append("hflip")
+        if self.flip in ("vertical", "both"):
+            filters.append("vflip")
+        return filters
+
+    def output_args(self) -> list[str]:
+        filters = self.filters()
+        if self.passthrough and not filters:
+            return ["-c:v", "copy"]
+        args = ["-vf", ",".join(filters)] if filters else []
+        return args + ["-threads", "2", "-c:v", "mjpeg", "-q:v",
+                       str(round(31 - self.quality * .29))]
 
     # --------------------------------------------------------------
     def probe(self) -> dict:
@@ -186,8 +219,11 @@ class V4L2Backend:
 
     # --------------------------------------------------------------
     def start(self):
-        self.probe()
-        self.input_format = self.probe().get("input_format", "mjpeg")
+        info = self.probe()
+        self.input_format = info.get("input_format", "mjpeg")
+        self.passthrough = info.get("passthrough", True)
+        self.error = None
+        self._stderr.clear()
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-f", "v4l2",
@@ -197,13 +233,21 @@ class V4L2Backend:
             "-i", self.device,
             "-f", "image2pipe",
         ]
-        cmd += ["-c:v", "copy"] if self.passthrough else ["-c:v", "mjpeg", "-q:v", "5"]
+        cmd += self.output_args()
         cmd += ["-"]
         self._stop.clear()
         self.proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self._error_thread = threading.Thread(target=self._drain_errors,
+                                              args=(self.proc,), daemon=True)
+        self._error_thread.start()
         self._thread = threading.Thread(target=self._reader, name="v4l2-reader", daemon=True)
         self._thread.start()
+
+    def _drain_errors(self, proc):
+        if proc.stderr:
+            for line in iter(proc.stderr.readline, b""):
+                self._stderr.append(line.decode("utf-8", "replace").strip()[:500])
 
     def _reader(self):
         proc = self.proc
@@ -240,11 +284,7 @@ class V4L2Backend:
             if self.error:
                 raise RuntimeError(self.error)
             if self.proc and self.proc.poll() is not None:
-                err = ""
-                try:
-                    err = self.proc.stderr.read().decode("utf-8", "replace")[-300:]
-                except Exception:
-                    pass
+                err = " ".join(self._stderr)[-500:]
                 raise RuntimeError(f"ffmpeg 退出（code={self.proc.returncode}）{err}")
             raise TimeoutError(f"V4L2 取帧超时（{timeout}s）")
 
@@ -259,7 +299,15 @@ class V4L2Backend:
                     self.proc.kill()
                 except Exception:
                     pass
+            for thread in (self._thread, self._error_thread):
+                if thread and thread is not threading.current_thread():
+                    thread.join(timeout=2)
             self.proc = None
+        while not self._q.empty():
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
 
 
 # ----------------------------------------------------------------------
@@ -630,6 +678,8 @@ class Camera:
         self.backend = "libcamera"
         # 是否需要软件做旋转/镜像（ISP 能力不足时）
         self._software_transform = False
+        self.journal = DetectionJournal(config, log)
+        self.processor = VideoProcessor(config)
         self._rot = 0
         self._flip = "none"
         # 成像参数（亮度/对比度/白平衡/ISO…）：随配置走，三条通路的应用方式不同
@@ -740,6 +790,14 @@ class Camera:
         if chosen is None:
             return "libcamera", {"index": 0, "model": "未检测到摄像头", "type": "csi",
                                  "backend": "libcamera", "device": ""}
+        if chosen.get("type") == "usb" and chosen.get("backend") == "libcamera":
+            from .audio import video_usb_port
+            port = re.search(r"-([0-9]+(?:\.[0-9]+)+):[0-9]+\.[0-9]+", chosen.get("id", ""))
+            if port:
+                preferred = next((c for c in usb if c.get("backend") == "v4l2"
+                                  and video_usb_port(c.get("device", "")) == port.group(1)), None)
+                if preferred:
+                    chosen = preferred
         self.camera_info = dict(chosen)
         backend = chosen.get("backend") or ("libcamera" if chosen.get("type") == "csi" else "v4l2")
         return backend, chosen
@@ -947,17 +1005,17 @@ class Camera:
 
         if backend == "v4l2":
             device = chosen.get("device") or chosen.get("id") or ""
-            self.v4l2 = V4L2Backend(device, int(w), int(h), fps)
-            self.adapter = FrameAdapter("MJPEG", int(w), int(h),
-                                        int(self.config.get("camera", "jpeg_quality", default=72)))
             rot0, flip0 = self._transform_params()
+            quality = int(self.config.get("camera", "jpeg_quality", default=72))
+            self.v4l2 = V4L2Backend(device, int(w), int(h), fps, rot0, flip0, quality)
+            ow, oh = self.v4l2.output_size
+            self.adapter = FrameAdapter("MJPEG", ow, oh, quality)
             self._rot, self._flip = rot0, flip0
             self._software_transform = False
-            if rot0 or flip0 != "none":
-                # USB 通路是 MJPEG 直通，旋转/镜像需要解码重编码，暂不支持
-                self.log(f"USB 摄像头暂不支持旋转/镜像（当前 {rot0}° / {flip0}），已忽略")
             self.camera_info.update({"backend": "v4l2", "format": "MJPEG",
-                                     "resolution": [int(w), int(h)],
+                                     "resolution": [ow, oh],
+                                     "capture_resolution": [int(w), int(h)],
+                                     "transcoding": bool(self.v4l2.filters()),
                                      "rotation": rot0, "flip": flip0})
             return None
 
@@ -1097,6 +1155,7 @@ class Camera:
                 self.cam = self._build_config()
                 if self.v4l2:
                     self.v4l2.start()
+                    self.camera_info["transcoding"] = (not self.v4l2.passthrough or bool(self.v4l2.filters()))
                     # USB 摄像头的成像控件要在流起来之后再下发：
                     # 设备被占用时 v4l2-ctl 改不了控制项。
                     self._apply_v4l2_imaging(self._imaging)
@@ -1150,6 +1209,11 @@ class Camera:
 
     # ------------------------------------------------------------------
     def _capture_loop(self) -> None:
+        # Keep optional processors outside the per-frame setup work.
+        if not hasattr(self, "processor"):
+            self.processor = VideoProcessor(self.config)
+        if not hasattr(self, "journal"):
+            self.journal = DetectionJournal(self.config, self.log if hasattr(self, "log") else None)
         adapter = self.adapter
         detect_w, detect_h = self.config.get("camera", "detect_resolution", default=[320, 180])
         detect_w, detect_h = int(detect_w), int(detect_h)
@@ -1221,6 +1285,11 @@ class Camera:
 
             t0 = time.perf_counter()
             jpeg = adapter.to_jpeg(frame)
+            clean_jpeg = self.processor.transform(jpeg)
+            processed = clean_jpeg is not jpeg
+            burn_in = self.config.get("web", "burn_in", default={}) or {}
+            jpeg = (self.processor.annotate(clean_jpeg, self.state.snapshot())
+                    if burn_in.get("enabled") else clean_jpeg)
             self._jpeg_ms = (time.perf_counter() - t0) * 1000
 
             with self._lock:
@@ -1229,7 +1298,8 @@ class Camera:
 
             if now - last_detect >= detect_interval * 0.95:
                 last_detect = now
-                gray = adapter.to_gray(frame, detect_w, detect_h)
+                gray = (FrameAdapter("MJPEG", adapter.width, adapter.height, adapter.quality).to_gray(clean_jpeg, detect_w, detect_h)
+                        if processed else adapter.to_gray(frame, detect_w, detect_h))
                 if gray is not None:
                     det = self.detector.process(gray)
                     self._motion = det.motion
@@ -1245,8 +1315,10 @@ class Camera:
                             "ratio": det.ratio,
                             "ratios": det.ratios,
                             "bbox": list(det.bbox) if det.bbox else None,
+                            "analysis": det.analysis,
                         },
                     )
+                    self.journal.publish(det)
 
             if last_record is None or now - last_record >= record_interval:
                 if last_record is None:
@@ -1274,3 +1346,40 @@ class Camera:
                 self._fps_mark = time.time()
             else:
                 self.state.update(last_frame_at=now)
+
+    def high_resolution_still(self, size):
+        width, height = [int(v) for v in size]
+        if not (64 <= width <= 12000 and 64 <= height <= 12000 and width*height <= 60_000_000):
+            raise ValueError("Invalid still resolution")
+        backend, chosen = self._resolve_device()
+        self.stop()
+        try:
+            self.recorder.stop()
+            if backend == "v4l2":
+                dev = chosen.get("device") or chosen.get("id")
+                source = V4L2Backend(dev, width, height, 10)
+                fmt = source.probe()["input_format"]
+                cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "v4l2", "-input_format", fmt,
+                       "-video_size", f"{width}x{height}", "-i", dev, "-frames:v", "1", "-threads", "2",
+                       "-c:v", "mjpeg", "-q:v", "2", "-f", "image2pipe", "-"]
+            else:
+                binary = "rpicam-still"
+                if not shutil.which(binary):
+                    raise RuntimeError("rpicam-still is required for independent-resolution stills")
+                cmd = [binary, "--nopreview", "--timeout", "800", "--camera", str(chosen.get("index", 0)),
+                       "--width", str(width), "--height", str(height), "--output", "-", "--encoding", "jpg"]
+                cmd += imaging.rpicam_args(self._load_imaging())
+            result = subprocess.run(cmd, capture_output=True, timeout=35)
+            if result.returncode or not result.stdout.startswith(b"\xff\xd8"):
+                raise RuntimeError("Still capture failed: "+result.stderr.decode("utf-8", "replace")[-300:])
+            with Image.open(io.BytesIO(result.stdout)) as image:
+                im = image.convert("RGB")
+            rot, flip = self._transform_params()
+            if rot: im = im.rotate(rot, expand=True)
+            if flip in ("horizontal", "both"): im = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            if flip in ("vertical", "both"): im = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+            buf = io.BytesIO();im.save(buf, "JPEG", quality=95)
+            return self.processor.annotate(self.processor.transform(buf.getvalue()), self.state.snapshot())
+        finally:
+            self.detector.reset()
+            self.start()

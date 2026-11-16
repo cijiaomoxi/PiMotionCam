@@ -5,6 +5,20 @@ All notable changes to PiMotionCam are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.8.2 — 2026-11-16
+
+- 浏览器实时 PCM 音频、共享 ALSA 采集、增益、声音触发及独立 MP3。
+- USB MJPEG 实际旋转 / 镜像；无变换时保留直通。
+- 可选软件方向 / 矢量 / burst 分析，CSV、非阻塞 FIFO、运动起止日志及相机移动静置。
+- 立即手动录像、外部触发、运动抓拍、持久化命名序号、整帧缩略图修复。
+- 可选裁剪、软件效果、防抖、独立尺寸抓拍和烧入字幕；不宣称 MMAL 硬件兼容。
+- 预设复制 / 移动、舵机反相 / 步进 / 巡航与绑定预设、日出日落调度、六种新增钩子。
+- 本地 / 已挂载 NFS/SMB 日历归档及校验；签名 TCP / 组播和客户端工具默认关闭。
+- 主题、扩展链接、CLI、日志行数和相机设置导入 / 导出；完整中英控件。
+- 修复 PCM 块时长少算样本宽度、音频切片浮点截断、监听误开录像音轨、FIFO 停止阻塞、调度跨午夜及网页伪造本地 shell 来源等问题。
+
+Live browser audio, shared capture, gain, sound triggers and MP3; USB transforms with passthrough retained when off; optional software motion analysis and telemetry; manual/external recording and motion photos; persistent naming; image processing/captions; preset/servo/solar extensions; verified calendar archives; opt-in signed network controls; and bilingual settings. Legacy MMAL, full upstream OSD menus and raw wire compatibility are not claimed. See [validation status](docs/V2.8.2-VALIDATION.md) before deployment.
+
 ## Versions
 
 | Version | Date | Highlights |

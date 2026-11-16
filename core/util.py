@@ -38,13 +38,13 @@ def safe_filename(name: str, fallback: str = "file") -> str:
     return out or fallback
 
 
-def run_command(cmd: str, timeout: float = 60, cwd: str | None = None) -> tuple[int, str, str]:
+def run_command(cmd: str, timeout: float = 60, cwd: str | None = None, env=None) -> tuple[int, str, str]:
     """执行 shell 命令，返回 (returncode, stdout, stderr)。"""
     if not cmd or not cmd.strip():
         return 0, "", ""
     try:
         proc = subprocess.run(
-            cmd, shell=True, cwd=cwd, timeout=timeout,
+            cmd, shell=True, cwd=cwd, timeout=timeout, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
     except subprocess.TimeoutExpired:

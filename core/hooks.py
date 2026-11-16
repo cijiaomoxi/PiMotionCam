@@ -60,7 +60,10 @@ class Hooks:
             del self._history[50:]
 
         def worker():
-            rc, out, err = run_command(rendered, timeout=120)
+            environment = os.environ.copy()
+            environment["PMC_MESSAGE"] = str(payload.get("message", ""))
+            environment["PMC_PEER"] = str(payload.get("peer", ""))
+            rc, out, err = run_command(rendered, timeout=120, env=environment)
             entry["status"] = "ok" if rc == 0 else "error"
             entry["rc"] = rc
             entry["stdout"] = out[-2000:]

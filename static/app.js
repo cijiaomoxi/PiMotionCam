@@ -986,6 +986,13 @@ async function purgeLoop() {
  * 音频（麦克风）
  * ===================================================================*/
 let AUDIO = null;
+const liveAudio = new PMCLiveAudio.PCMPlayer({ onState: (state) => {
+  const message = t('audio.live.' + state);
+  setText('live-audio-status', message);
+  setText('preview-hint', message);
+  ['btn-live-listen', 'btn-preview-listen'].forEach(id => { $(id).disabled = liveAudio.active; });
+  ['btn-live-stop', 'btn-preview-listen-stop'].forEach(id => { $(id).disabled = !liveAudio.active; });
+} });
 
 function audioStateText(st) {
   if (st === 'running') return t('audio.running');
@@ -1022,20 +1029,22 @@ function renderAudio() {
         sel.appendChild(o);
       }
     }
-    if (document.activeElement !== sel) sel.value = AUDIO.configured_device || 'auto';
+    if (document.activeElement !== sel && !sel.dataset.dirty) sel.value = AUDIO.configured_device || 'auto';
   }
 
   const rate = $('audio-rate');
-  if (rate && document.activeElement !== rate) rate.value = String(AUDIO.rate || 16000);
+  if (rate && document.activeElement !== rate && !rate.dataset.dirty) rate.value = String(AUDIO.rate || 16000);
   const ch = $('audio-channels');
-  if (ch && document.activeElement !== ch) ch.value = String(AUDIO.channels || 1);
+  if (ch && document.activeElement !== ch && !ch.dataset.dirty) ch.value = String(AUDIO.channels || 1);
   const en = $('audio-enabled');
-  if (en) en.checked = !!AUDIO.enabled;
+  if (en && !en.dataset.dirty) en.checked = !!AUDIO.enabled;
+  if (!$('audio-stream-enabled').dataset.dirty) $('audio-stream-enabled').checked = !!AUDIO.stream_enabled;
+  if (document.activeElement !== $('audio-gain') && !$('audio-gain').dataset.dirty) $('audio-gain').value = AUDIO.gain_db || 0;
 
   let detail = '';
   if (AUDIO.state === 'error') {
-    detail = t('audio.noDevice') + (AUDIO.error ? t('sep.colon') + AUDIO.error : '');
-  } else if (AUDIO.enabled) {
+    detail = t('audio.noDevice') + (AUDIO.error && (!/[\u3400-\u9fff]/.test(AUDIO.error) || window.PKC_I18N.language === 'zh-CN') ? t('sep.colon') + AUDIO.error : '');
+  } else if (AUDIO.state === 'running') {
     detail = t('audio.detail', {
       device: AUDIO.device || '-',
       rate: AUDIO.rate || 0,
@@ -1058,12 +1067,15 @@ async function loadAudio(brief) {
 async function saveAudio() {
   const body = {
     enabled: $('audio-enabled') ? $('audio-enabled').checked : false,
+    stream_enabled: $('audio-stream-enabled').checked,
+    gain_db: +$('audio-gain').value,
     device: $('audio-device') ? $('audio-device').value : 'auto',
     rate: +($('audio-rate') ? $('audio-rate').value : 16000),
     channels: +($('audio-channels') ? $('audio-channels').value : 1)
   };
   try {
     AUDIO = await POST('/api/audio', body);
+    ['audio-enabled','audio-stream-enabled','audio-gain','audio-device','audio-rate','audio-channels'].forEach(id => delete $(id).dataset.dirty);
     renderAudio();
     toast(t('toast.audioSaved'), 'ok');
   } catch (e) {
@@ -1072,6 +1084,13 @@ async function saveAudio() {
 }
 
 /* 配置预设 */
+['audio-enabled','audio-stream-enabled','audio-gain','audio-device','audio-rate','audio-channels'].forEach(id => $(id).addEventListener('input', () => { $(id).dataset.dirty = '1'; }));
+$('btn-audio-save').addEventListener('click', saveAudio);
+['btn-live-listen', 'btn-preview-listen'].forEach(id => $(id).addEventListener('click', () => liveAudio.start(API + '/api/audio/stream')));
+['btn-live-stop', 'btn-preview-listen-stop'].forEach(id => $(id).addEventListener('click', () => liveAudio.stop()));
+$('live-audio-volume').addEventListener('input', (e) => liveAudio.setVolume(+e.target.value / 100));
+window.addEventListener('pagehide', () => liveAudio.stop());
+
 async function loadPresets() {
   try {
     const r = await GET('/api/presets');
@@ -1613,6 +1632,7 @@ $('btn-servo-savepos').addEventListener('click', async () => {
   try {
     await POST('/api/servo', {
       action: 'save_position', name: name,
+      preset: $('pos-preset') ? $('pos-preset').value : '',
       pan: +$('servo-pan').value, tilt: +$('servo-tilt').value
     });
     $('pos-name').value = '';
@@ -1687,7 +1707,7 @@ $('btn-pwd').addEventListener('click', async () => {
   } catch (e) { toast(t('err.setFailed') + e.message, 'err'); }
 });
 
-const HOOK_KEYS = ['on_motion_begin', 'on_motion_end', 'on_motion_preview_save', 'on_timelapse_end'];
+const HOOK_KEYS = ['on_motion_begin', 'on_motion_end', 'on_motion_preview_save', 'on_timelapse_end', 'on_startup', 'on_motion_enable', 'on_loop_end', 'on_manual_end', 'on_still_capture', 'on_multicast_pkc_message'];
 
 async function loadHooks() {
   try {
@@ -2068,7 +2088,6 @@ async function init() {
   $('btn-imaging-reset').addEventListener('click', resetImaging);
   $('btn-loop-save').addEventListener('click', saveLoop);
   $('btn-loop-purge').addEventListener('click', purgeLoop);
-  $('btn-audio-save').addEventListener('click', saveAudio);
 
   const visible = () => !document.hidden;
   const onTab = (name) => visible() && $('page-' + name).classList.contains('active');
@@ -2082,6 +2101,7 @@ async function init() {
     if (visible()) pollState();
   });
   setTimeout(loadServo, 500);
+  document.documentElement.dataset.ready = 'true';
 }
 
 init();

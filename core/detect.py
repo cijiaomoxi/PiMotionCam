@@ -1,11 +1,11 @@
-"""多区域 + 双算法运动检测（等效官方 PiKrellCam 的 MMAL 运动矢量检测）。
+"""多区域双算法帧差检测，可选软件方向分析；不使用 MMAL 硬件矢量。
 
 官方依赖 BCM2835 的 MMAL 硬件运动矢量，Debian 13 的新 libcamera 栈不向用户态
-暴露该能力，这里用帧差分等效实现：
+暴露该能力，这里使用独立的帧差分实现：
 
   1. 帧与上一帧灰度图做绝对差
   2. 按 magnitude_limit 二值化
-  3. 邻域密度滤波去掉孤立噪点（等效官方的 "sparkle" 过滤）
+  3. 邻域密度滤波去掉孤立噪点
   4. 在每个运动区域内统计有效变化像素占比，超过 count_limit 即命中
   5. 连续命中 consecutive_frames 帧才判定为移动
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
+from collections import deque
 
 import numpy as np
 
@@ -31,6 +32,7 @@ class Detection:
     ratio: float = 0.0
     bbox: tuple[int, int, int, int] | None = None   # 触发区域的像素包围盒
     ratios: dict = field(default_factory=dict)        # {算法: {区域: 占比}}
+    analysis: dict = field(default_factory=dict)
 
 
 def _box_sum(mask: np.ndarray, k: int) -> np.ndarray:
@@ -67,11 +69,68 @@ class Detector:
         self.detect_fps = 0.0
         self._fps_mark = time.time()
         self._fps_count = 0
+        self._recent = deque(maxlen=120)
+        self._suppress_until = 0.0
 
     def reset(self):
         with self._lock:
             self._prev = None
             self._hits.clear()
+            self._recent.clear()
+
+    def suppress(self, seconds=1.0):
+        with self._lock:
+            self._suppress_until = time.monotonic() + max(0., min(60., float(seconds)))
+            self._hits.clear()
+            self._recent.clear()
+
+    def _analyze(self, det, prev, gray):
+        options = self._cfg.get("motion", "analysis", default={}) or {}
+        if not options.get("enabled"):
+            return det
+        from .motion_analysis import motion_vectors
+        diff = np.abs(gray.astype(np.int16) - prev.astype(np.int16))
+        mask = diff > max(1, int(options.get("threshold", 15)))
+        significant = mask & (_box_sum(mask, 3) >= 3)
+        roi = np.zeros(gray.shape, dtype=bool)
+        for region in self._regions():
+            h, w = gray.shape
+            x0 = max(0, min(w, int(float(region.get("x", 0))*w)))
+            y0 = max(0, min(h, int(float(region.get("y", 0))*h)))
+            x1 = max(x0, min(w, int((float(region.get("x", 0)) + float(region.get("w", 1))) * w)))
+            y1 = max(y0, min(h, int((float(region.get("y", 0)) + float(region.get("h", 1))) * h)))
+            roi[y0:y1, x0:x1] = True
+        significant &= roi
+        mask &= roi
+        raw = int(mask.sum())
+        kept = int(significant.sum())
+        det.analysis = {"source": "software", "changed_pixels": raw,
+                        "rejected_pixels": max(0, raw-kept),
+                        "change_ratio": round(kept/max(1, mask.size), 5)}
+        if options.get("vectors", True):
+            flow = motion_vectors(prev, gray)
+            flow["vectors"] = [v for v in flow["vectors"]
+                               if roi[min(gray.shape[0]-1, int(v["y"]*gray.shape[0])),
+                                      min(gray.shape[1]-1, int(v["x"]*gray.shape[1]))]]
+            vectors = flow["vectors"]
+            dx = float(np.median([v["dx"] for v in vectors])) if vectors else 0.
+            dy = float(np.median([v["dy"] for v in vectors])) if vectors else 0.
+            flow.update(dx=dx, dy=dy, direction=("right" if dx>0 else "left") if abs(dx)>abs(dy)
+                        else (("down" if dy>0 else "up") if dy else "still"))
+            det.analysis.update(flow)
+        burst = float(options.get("burst_ratio", 0))
+        ratio = kept/max(1, int(roi.sum()))
+        self._recent.append(ratio >= burst if burst > 0 else False)
+        frames = max(1, min(60, int(options.get("burst_frames", 3))))
+        gap = max(0, min(60, int(options.get("confirm_gap_frames", 0))))
+        recent = list(self._recent)[-(frames+gap):]
+        if burst > 0 and recent[-1] and sum(recent) >= frames:
+            det.motion, det.algorithm, det.region = True, "burst", "Full frame"
+            det.ratio = ratio
+        wanted = options.get("direction", "any")
+        if wanted in ("left", "right", "up", "down") and det.analysis.get("direction") != wanted:
+            det.motion = False
+        return det
 
     # ------------------------------------------------------------------
     def _algorithms(self) -> dict:
@@ -143,11 +202,13 @@ class Detector:
     def process(self, gray: np.ndarray) -> Detection:
         """喂入一帧灰度图，返回检测结果。"""
         with self._lock:
-            if not self._cfg.get("motion", "enabled", default=True):
+            if (not self._cfg.get("motion", "enabled", default=True)
+                    or time.monotonic() < self._suppress_until):
                 # Keep the baseline current while disabled, and discard old
                 # consecutive hits so re-enabling starts a fresh sequence.
                 self._prev = gray.copy()
                 self._hits.clear()
+                self._recent.clear()
                 self.last = Detection()
                 self.frame_count += 1
                 self._fps_count += 1
@@ -167,6 +228,7 @@ class Detector:
             if native.available():
                 det = self._native_detect(gray, prev, algos, regions)
                 if det is not None:
+                    det = self._analyze(det, prev, gray)
                     self._prev = gray.copy()
                     self.last = det
                     self.frame_count += 1
@@ -230,6 +292,7 @@ class Detector:
                 if det.ratios.get(key[0], {}).get(key[1], 0) < 0:
                     self._hits.pop(key, None)
 
+            det = self._analyze(det, prev, gray)
             self.last = det
             self.frame_count += 1
             self._fps_count += 1
